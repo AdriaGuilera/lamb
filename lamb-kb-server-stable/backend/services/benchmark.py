@@ -42,14 +42,21 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "question": "Why can a knowledge graph improve questions that require information from multiple course documents?",
                 "expected_answer": "It traverses related concepts and can recover evidence that is conceptually connected even when it is not the closest vector match.",
                 "relevant_files": ["rag_basics.md", "knowledge_graphs.md"],
-                "expected_concepts": ["multi-hop retrieval", "knowledge graph", "vector search"],
+                "expected_concepts": [
+                    "multi-hop retrieval",
+                    "knowledge graph",
+                    "vector search",
+                ],
                 "kind": "multi-hop",
             },
             {
                 "id": "q3",
                 "question": "Why does traceability matter when educators rename or merge concepts?",
                 "expected_answer": "Traceability records ChangeEvent nodes with operation, actor, timestamp, affected concepts, and payload so graph edits can be audited.",
-                "relevant_files": ["traceability_and_curation.md", "knowledge_graphs.md"],
+                "relevant_files": [
+                    "traceability_and_curation.md",
+                    "knowledge_graphs.md",
+                ],
                 "expected_concepts": ["changeevent", "manual curation", "traceability"],
                 "kind": "multi-hop",
             },
@@ -58,7 +65,12 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "question": "Which technologies does the prototype replicate from the LAMB kb-server architecture?",
                 "expected_answer": "FastAPI, SQLite, ChromaDB, Markdown ingestion, parent-child chunking, and chat completion.",
                 "relevant_files": ["lamb_kb_server.md", "rag_basics.md"],
-                "expected_concepts": ["fastapi", "sqlite", "chromadb", "parent-child chunking"],
+                "expected_concepts": [
+                    "fastapi",
+                    "sqlite",
+                    "chromadb",
+                    "parent-child chunking",
+                ],
                 "kind": "single-hop",
             },
             {
@@ -74,7 +86,11 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "question": "What is the purpose of parent-child chunking in a LAMB-style retrieval pipeline?",
                 "expected_answer": "Small child chunks improve semantic search while larger parent chunks give the language model enough context.",
                 "relevant_files": ["rag_basics.md"],
-                "expected_concepts": ["parent-child chunking", "child chunks", "parent chunks"],
+                "expected_concepts": [
+                    "parent-child chunking",
+                    "child chunks",
+                    "parent chunks",
+                ],
                 "kind": "single-hop",
             },
             {
@@ -97,8 +113,15 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "id": "q9",
                 "question": "What should the KG-RAG UI show to make retrieval less opaque?",
                 "expected_answer": "It should show entry concepts, traversed relationships, expanded chunks, and recent ChangeEvent metadata.",
-                "relevant_files": ["knowledge_graphs.md", "traceability_and_curation.md"],
-                "expected_concepts": ["entry concepts", "traversed relationships", "changeevent"],
+                "relevant_files": [
+                    "knowledge_graphs.md",
+                    "traceability_and_curation.md",
+                ],
+                "expected_concepts": [
+                    "entry concepts",
+                    "traversed relationships",
+                    "changeevent",
+                ],
                 "kind": "multi-hop",
             },
             {
@@ -131,7 +154,11 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "question": "What checksum code and owner are listed for Iris Archive?",
                 "expected_answer": "Iris Archive has checksum code IA-72 and is owned by the Records Integrity Desk.",
                 "relevant_files": ["iris_archive_profile.md"],
-                "expected_concepts": ["iris archive", "ia-72", "records integrity desk"],
+                "expected_concepts": [
+                    "iris archive",
+                    "ia-72",
+                    "records integrity desk",
+                ],
                 "kind": "control-single-doc",
             },
             {
@@ -163,32 +190,67 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "id": "p1",
                 "question": "After the Aurora Port outage, which agency owns the project that mitigated the root failure?",
                 "expected_answer": "The Aurora Port outage was caused by TideNet router failure, which is mitigated by Harbor Battery Deployment; that project is owned by the Port Resilience Office.",
-                "relevant_files": ["city_incident_digest.md", "failure_to_project_map.md", "agency_directory.md"],
-                "expected_concepts": ["aurora port outage", "tidenet router failure", "harbor battery deployment", "port resilience office"],
+                "relevant_files": [
+                    "city_incident_digest.md",
+                    "failure_to_project_map.md",
+                    "agency_directory.md",
+                ],
+                "expected_concepts": [
+                    "aurora port outage",
+                    "tidenet router failure",
+                    "harbor battery deployment",
+                    "port resilience office",
+                ],
                 "kind": "paper-inference",
             },
             {
                 "id": "p2",
                 "question": "Which mitigation had the larger budget: the project for the Aurora Port outage or the project for the Lantern Bridge closure?",
                 "expected_answer": "Aurora Port maps to Harbor Battery Deployment at 18.4 million euros, while Lantern Bridge maps to Eastbank Shuttle Loop at 12.1 million euros, so Harbor Battery Deployment is larger.",
-                "relevant_files": ["city_incident_digest.md", "failure_to_project_map.md", "budget_register.md"],
-                "expected_concepts": ["aurora port outage", "lantern bridge closure", "harbor battery deployment", "eastbank shuttle loop"],
+                "relevant_files": [
+                    "city_incident_digest.md",
+                    "failure_to_project_map.md",
+                    "budget_register.md",
+                ],
+                "expected_concepts": [
+                    "aurora port outage",
+                    "lantern bridge closure",
+                    "harbor battery deployment",
+                    "eastbank shuttle loop",
+                ],
                 "kind": "paper-comparison",
             },
             {
                 "id": "p3",
                 "question": "Which was completed earlier: the mitigation for the Lantern Bridge closure or the mitigation for the Cobalt Clinic evacuation?",
                 "expected_answer": "Lantern Bridge maps to Eastbank Shuttle Loop, completed on 2025-07-02. Cobalt Clinic maps to Clinic Microgrid Retrofit, completed on 2025-10-20. Eastbank Shuttle Loop was completed earlier.",
-                "relevant_files": ["city_incident_digest.md", "failure_to_project_map.md", "schedule_updates.md"],
-                "expected_concepts": ["lantern bridge closure", "cobalt clinic evacuation", "eastbank shuttle loop", "clinic microgrid retrofit"],
+                "relevant_files": [
+                    "city_incident_digest.md",
+                    "failure_to_project_map.md",
+                    "schedule_updates.md",
+                ],
+                "expected_concepts": [
+                    "lantern bridge closure",
+                    "cobalt clinic evacuation",
+                    "eastbank shuttle loop",
+                    "clinic microgrid retrofit",
+                ],
                 "kind": "paper-temporal",
             },
             {
                 "id": "p4",
                 "question": "What budget and owner correspond to the project that mitigated the MercyWing generator fault?",
                 "expected_answer": "MercyWing generator fault maps to Clinic Microgrid Retrofit, which has a budget of 9.6 million euros and is owned by the Health Facilities Bureau.",
-                "relevant_files": ["failure_to_project_map.md", "budget_register.md", "agency_directory.md"],
-                "expected_concepts": ["mercywing generator fault", "clinic microgrid retrofit", "health facilities bureau"],
+                "relevant_files": [
+                    "failure_to_project_map.md",
+                    "budget_register.md",
+                    "agency_directory.md",
+                ],
+                "expected_concepts": [
+                    "mercywing generator fault",
+                    "clinic microgrid retrofit",
+                    "health facilities bureau",
+                ],
                 "kind": "paper-inference",
             },
             {
@@ -205,7 +267,11 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "question": "Which owner agency is responsible for the mitigation project that has the emergency mobility budget category?",
                 "expected_answer": "The emergency mobility budget category belongs to Eastbank Shuttle Loop, which is owned by the Transit Continuity Unit.",
                 "relevant_files": ["budget_register.md", "agency_directory.md"],
-                "expected_concepts": ["emergency mobility", "eastbank shuttle loop", "transit continuity unit"],
+                "expected_concepts": [
+                    "emergency mobility",
+                    "eastbank shuttle loop",
+                    "transit continuity unit",
+                ],
                 "kind": "paper-bridge",
             },
         ],
@@ -221,31 +287,62 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "id": "x1",
                 "question": "Case Orion-17 needs closure. What exact closure sequence should be applied?",
                 "expected_answer": "Follow protocol Glass Harbor: disable the quartz bypass, replace the cerulean latch, and run the cold-start assay.",
-                "relevant_files": ["anomaly_bridge_extreme.md", "protocol_index_extreme.md", "remediation_playbook_extreme.md"],
-                "expected_concepts": ["orion-17", "aster valve drift", "m-41", "glass harbor"],
+                "relevant_files": [
+                    "anomaly_bridge_extreme.md",
+                    "protocol_index_extreme.md",
+                    "remediation_playbook_extreme.md",
+                ],
+                "expected_concepts": [
+                    "orion-17",
+                    "aster valve drift",
+                    "m-41",
+                    "glass harbor",
+                ],
                 "kind": "extreme-multi-hop",
             },
             {
                 "id": "x2",
                 "question": "Case Vega-03 needs closure. What exact closure sequence should be applied?",
                 "expected_answer": "Vega-03 has Lumen shard bloom, which maps to Q-Delta and then Night Orchard: isolate the amber bus, reseed the clock lattice, and run the midnight parity check.",
-                "relevant_files": ["anomaly_bridge_extreme.md", "protocol_index_extreme.md", "remediation_playbook_extreme.md"],
-                "expected_concepts": ["vega-03", "lumen shard bloom", "q-delta", "night orchard"],
+                "relevant_files": [
+                    "anomaly_bridge_extreme.md",
+                    "protocol_index_extreme.md",
+                    "remediation_playbook_extreme.md",
+                ],
+                "expected_concepts": [
+                    "vega-03",
+                    "lumen shard bloom",
+                    "q-delta",
+                    "night orchard",
+                ],
                 "kind": "extreme-multi-hop",
             },
             {
                 "id": "x3",
                 "question": "Case Mira-22 needs closure. What exact closure sequence should be applied?",
                 "expected_answer": "Mira-22 has Sable checksum echo, which maps to R-9 and then Blue Thread: rotate the ivory token, rebuild the relay ledger, and run the archive handshake.",
-                "relevant_files": ["anomaly_bridge_extreme.md", "protocol_index_extreme.md", "remediation_playbook_extreme.md"],
-                "expected_concepts": ["mira-22", "sable checksum echo", "r-9", "blue thread"],
+                "relevant_files": [
+                    "anomaly_bridge_extreme.md",
+                    "protocol_index_extreme.md",
+                    "remediation_playbook_extreme.md",
+                ],
+                "expected_concepts": [
+                    "mira-22",
+                    "sable checksum echo",
+                    "r-9",
+                    "blue thread",
+                ],
                 "kind": "extreme-multi-hop",
             },
             {
                 "id": "x4",
                 "question": "A HelioForge report only says Aster valve drift. What closure sequence follows from the chain?",
                 "expected_answer": "Aster valve drift indicates M-41; M-41 is governed by Glass Harbor; Glass Harbor requires disabling the quartz bypass, replacing the cerulean latch, and running the cold-start assay.",
-                "relevant_files": ["anomaly_bridge_extreme.md", "protocol_index_extreme.md", "remediation_playbook_extreme.md"],
+                "relevant_files": [
+                    "anomaly_bridge_extreme.md",
+                    "protocol_index_extreme.md",
+                    "remediation_playbook_extreme.md",
+                ],
                 "expected_concepts": ["aster valve drift", "m-41", "glass harbor"],
                 "kind": "extreme-multi-hop",
             },
@@ -253,7 +350,11 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "id": "x5",
                 "question": "A North Atrium report only says Lumen shard bloom. What closure sequence follows from the chain?",
                 "expected_answer": "Lumen shard bloom indicates Q-Delta; Q-Delta is governed by Night Orchard; Night Orchard requires isolating the amber bus, reseeding the clock lattice, and running the midnight parity check.",
-                "relevant_files": ["anomaly_bridge_extreme.md", "protocol_index_extreme.md", "remediation_playbook_extreme.md"],
+                "relevant_files": [
+                    "anomaly_bridge_extreme.md",
+                    "protocol_index_extreme.md",
+                    "remediation_playbook_extreme.md",
+                ],
                 "expected_concepts": ["lumen shard bloom", "q-delta", "night orchard"],
                 "kind": "extreme-multi-hop",
             },
@@ -261,7 +362,11 @@ _DATASETS: Dict[str, Dict[str, Any]] = {
                 "id": "x6",
                 "question": "An Archive Relay report only says Sable checksum echo. What closure sequence follows from the chain?",
                 "expected_answer": "Sable checksum echo indicates R-9; R-9 is governed by Blue Thread; Blue Thread requires rotating the ivory token, rebuilding the relay ledger, and running the archive handshake.",
-                "relevant_files": ["anomaly_bridge_extreme.md", "protocol_index_extreme.md", "remediation_playbook_extreme.md"],
+                "relevant_files": [
+                    "anomaly_bridge_extreme.md",
+                    "protocol_index_extreme.md",
+                    "remediation_playbook_extreme.md",
+                ],
                 "expected_concepts": ["sable checksum echo", "r-9", "blue thread"],
                 "kind": "extreme-multi-hop",
             },
@@ -316,7 +421,9 @@ class BenchmarkService:
         dataset = cls.get_dataset(request.dataset_id or "educational")
         questions = request.questions or dataset.questions
         if not questions:
-            raise HTTPException(status_code=400, detail="No benchmark questions supplied")
+            raise HTTPException(
+                status_code=400, detail="No benchmark questions supplied"
+            )
 
         top_k = int(request.top_k or dataset.recommended_top_k or 5)
         graph_depth = int(request.graph_depth or dataset.recommended_graph_depth or 2)
@@ -353,14 +460,20 @@ class BenchmarkService:
                 question=question,
                 response=baseline_response,
                 top_k=top_k,
-                vector_ms=float(baseline_response.get("timing", {}).get("total_ms", 0.0)),
+                vector_ms=float(
+                    baseline_response.get("timing", {}).get("total_ms", 0.0)
+                ),
                 graph_ms=0.0,
-                total_ms=float(baseline_response.get("timing", {}).get("total_ms", 0.0)),
+                total_ms=float(
+                    baseline_response.get("timing", {}).get("total_ms", 0.0)
+                ),
             )
             trace = cls._trace_from_results(kg_response.get("results", []))
             kg_total_ms = float(kg_response.get("timing", {}).get("total_ms", 0.0))
             kg_graph_ms = float(trace.get("graph_latency_ms") or 0.0)
-            kg_vector_ms = float(trace.get("vector_latency_ms") or max(kg_total_ms - kg_graph_ms, 0.0))
+            kg_vector_ms = float(
+                trace.get("vector_latency_ms") or max(kg_total_ms - kg_graph_ms, 0.0)
+            )
             kg_score = cls._score_response(
                 question=question,
                 response=kg_response,
@@ -387,7 +500,8 @@ class BenchmarkService:
         baseline_metrics = cls._aggregate(baseline_scores)
         kg_metrics = cls._aggregate(kg_scores)
         comparison = BenchmarkComparison(
-            delta_precision_at_k=kg_metrics.precision_at_k - baseline_metrics.precision_at_k,
+            delta_precision_at_k=kg_metrics.precision_at_k
+            - baseline_metrics.precision_at_k,
             delta_recall_at_k=kg_metrics.recall_at_k - baseline_metrics.recall_at_k,
             delta_mrr=kg_metrics.mrr - baseline_metrics.mrr,
             graph_overhead_ms=kg_metrics.avg_total_ms - baseline_metrics.avg_total_ms,
@@ -437,19 +551,15 @@ class BenchmarkService:
 
         summary = {
             "datasets": len(runs),
-            "avg_delta_recall_at_k": mean(
-                run.comparison.delta_recall_at_k for run in runs
-            )
-            if runs
-            else 0.0,
-            "avg_delta_mrr": mean(run.comparison.delta_mrr for run in runs)
-            if runs
-            else 0.0,
-            "avg_graph_overhead_ms": mean(
-                run.comparison.graph_overhead_ms for run in runs
-            )
-            if runs
-            else 0.0,
+            "avg_delta_recall_at_k": (
+                mean(run.comparison.delta_recall_at_k for run in runs) if runs else 0.0
+            ),
+            "avg_delta_mrr": (
+                mean(run.comparison.delta_mrr for run in runs) if runs else 0.0
+            ),
+            "avg_graph_overhead_ms": (
+                mean(run.comparison.graph_overhead_ms for run in runs) if runs else 0.0
+            ),
         }
         return BenchmarkRunAllResponse(
             collection_id=collection_id,
@@ -506,7 +616,9 @@ class BenchmarkService:
 
         hits = [filename in relevant for filename in retrieved_files]
         precision = sum(1 for hit in hits if hit) / max(top_k, 1)
-        recall = len({filename for filename in retrieved_files if filename in relevant}) / len(relevant)
+        recall = len(
+            {filename for filename in retrieved_files if filename in relevant}
+        ) / len(relevant)
         reciprocal = 0.0
         for index, hit in enumerate(hits, start=1):
             if hit:
@@ -537,7 +649,9 @@ class BenchmarkService:
         )
 
     @classmethod
-    def _retrieved_files(cls, results: Sequence[Dict[str, Any]], top_k: int) -> List[str]:
+    def _retrieved_files(
+        cls, results: Sequence[Dict[str, Any]], top_k: int
+    ) -> List[str]:
         retrieved: List[str] = []
         seen = set()
         for result in results:

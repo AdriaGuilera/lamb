@@ -17,7 +17,6 @@ from schemas.benchmark import (
 )
 from services.benchmark import BenchmarkService
 
-
 router = APIRouter(
     prefix="/benchmarks",
     tags=["Benchmarks"],
