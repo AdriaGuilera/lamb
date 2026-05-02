@@ -117,3 +117,15 @@ The benchmark API is exposed under `/benchmarks` and compares `simple_query` aga
 - `POST /benchmarks/collections/{collection_id}/run-all`: run all selected built-in datasets against the same collection.
 
 The Svelte knowledge-base detail page includes a `Benchmarks` tab that loads these datasets, runs a selected dataset or all tests, and displays aggregate metrics plus per-question retrieved files for baseline and KG-RAG.
+
+## Automated Test Coverage
+
+The focused KG-RAG suite in `backend/tests/e2e/test_kg_rag_units.py` covers LLM extraction parsing, mocked graph-store ingestion, ingestion hook behavior, KG-RAG graph expansion, benchmark scoring, and regressions for `simple_query` plus normal Chroma ingestion when KG-RAG is disabled.
+
+Run the lightweight suite with:
+
+```bash
+PYTHONPATH=/Users/guiilera/Proyectos/TFG/lamb/lamb-kb-server-stable/backend /Users/guiilera/Proyectos/TFG/.venv/bin/python -m pytest tests/e2e/test_kg_rag_units.py -q
+```
+
+The real Neo4j round-trip test is skipped by default. Enable it only in an environment with the Neo4j Python driver and a disposable database by setting `RUN_NEO4J_INTEGRATION_TESTS=1` plus `KG_RAG_NEO4J_URI`, `KG_RAG_NEO4J_USER`, and `KG_RAG_NEO4J_PASSWORD`.
