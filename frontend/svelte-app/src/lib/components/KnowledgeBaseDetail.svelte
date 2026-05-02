@@ -8,6 +8,7 @@
     import { browser } from '$app/environment'; // Import browser
     import ConfirmationModal from '$lib/components/modals/ConfirmationModal.svelte';
     import KnowledgeBaseGraphView from '$lib/components/KnowledgeBaseGraphView.svelte';
+    import KnowledgeBaseBenchmarkView from '$lib/components/KnowledgeBaseBenchmarkView.svelte';
     
     /** 
      * @typedef {import('$lib/services/knowledgeBaseService').IngestionPlugin} IngestionPlugin
@@ -145,8 +146,8 @@
     let serverOffline = $state(false);
 
     // Ingestion state
-    /** @type {'files' | 'ingest' | 'query' | 'graph'} */
-    let activeTab = $state('files'); // New state for tabs: 'files' or 'ingest' or 'query' or 'graph'
+    /** @type {'files' | 'ingest' | 'query' | 'graph' | 'benchmarks'} */
+    let activeTab = $state('files'); // New state for tabs: 'files' or 'ingest' or 'query' or 'graph' or 'benchmarks'
     /** @type {IngestionPlugin[]} */
     let plugins = $state([]);
     let loadingPlugins = $state(false);
@@ -337,7 +338,7 @@
     
     /**
      * Function to change active tab
-      * @param {'files' | 'ingest' | 'query' | 'graph'} tabName - The name of the tab to select
+     * @param {'files' | 'ingest' | 'query' | 'graph' | 'benchmarks'} tabName - The name of the tab to select
      */
     function selectTab(tabName) {
         console.log('Selecting tab:', tabName);
@@ -1162,6 +1163,17 @@
                             {$_('knowledgeBases.detail.tabs.query', { default: 'Query' })}
                         </button>
 
+                        <!-- Benchmarks Tab -->
+                        <button
+                            type="button"
+                            onclick={() => selectTab('benchmarks')}
+                            class="{activeTab === 'benchmarks' ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm"
+                            style={activeTab === 'benchmarks' ? 'border-color: #2271b3; color: #2271b3;' : ''}
+                            aria-current={activeTab === 'benchmarks' ? 'page' : undefined}
+                        >
+                            Benchmarks
+                        </button>
+
                         <!-- Graph Tab -->
                         <button
                             type="button"
@@ -1728,6 +1740,11 @@
                             {/if}
                             
                         </div>
+                    {/if}
+
+                    <!-- Benchmarks Tab Content -->
+                    {#if activeTab === 'benchmarks'}
+                        <KnowledgeBaseBenchmarkView kbId={kbId} />
                     {/if}
 
                     <!-- Graph Tab Content -->

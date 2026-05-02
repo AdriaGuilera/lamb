@@ -8,6 +8,8 @@ from services.concept_extraction import (
 )
 from plugins.kg_rag_query import KGRAGQueryPlugin
 from services.graph_store import GraphStore
+from services.benchmark import BenchmarkService
+from schemas.benchmark import BenchmarkQuestion
 
 
 def test_normalize_concept_folds_accents_and_spacing():
@@ -268,3 +270,44 @@ def test_collection_graph_unconfigured_returns_empty_snapshot():
     assert snapshot["edges"] == []
     assert snapshot["filters"]["concept"] == "Knowledge Graph"
     assert snapshot["counts"] == {"concepts": 0, "chunks": 0, "edges": 0}
+
+
+def test_benchmark_scores_precision_recall_mrr_by_filename():
+    question = BenchmarkQuestion(
+        id="q1",
+        question="Which files are relevant?",
+        relevant_files=["alpha.md", "beta.md"],
+    )
+    response = {
+        "results": [
+            {"metadata": {"filename": "noise.md"}},
+            {"metadata": {"filename": "alpha.md"}},
+            {"metadata": {"source": "/tmp/beta.md"}},
+        ]
+    }
+
+    score = BenchmarkService._score_response(
+        question=question,
+        response=response,
+        top_k=3,
+        vector_ms=12.0,
+        graph_ms=4.0,
+        total_ms=18.0,
+    )
+
+    assert score.precision_at_k == 2 / 3
+    assert score.recall_at_k == 1.0
+    assert score.mrr == 0.5
+    assert score.retrieved_files == ["noise.md", "alpha.md", "beta.md"]
+    assert score.vector_ms == 12.0
+    assert score.graph_ms == 4.0
+
+
+def test_benchmark_dataset_aliases_include_control_and_adversarial_sets():
+    control = BenchmarkService.get_dataset("no-connections")
+    adversarial = BenchmarkService.get_dataset("adversarial")
+
+    assert control.id == "control"
+    assert "parity" in control.expected_behavior
+    assert adversarial.id == "extreme"
+    assert adversarial.recommended_graph_depth == 4

@@ -106,3 +106,14 @@ Manual curation operations are collection-scoped and every successful operation 
 ## Frontend Graph View
 
 The Svelte knowledge-base detail page includes a `Graph` tab. It renders the snapshot endpoint as an SVG concept/chunk graph, supports concept/document/limit/chunk filters, shows change history, runs graph trace audits from seed chunk IDs, and exposes curation forms for users with modification permissions.
+
+## Benchmark Endpoints
+
+The benchmark API is exposed under `/benchmarks` and compares `simple_query` against `kg_rag_query` on an existing collection.
+
+- `GET /benchmarks/datasets`: list built-in benchmark datasets, including educational starter, no-connection control, paper-style multi-hop, and adversarial extreme sets.
+- `GET /benchmarks/datasets/{dataset_id}`: inspect the questions, relevant files, expected concepts, and expected behavior for a dataset.
+- `POST /benchmarks/collections/{collection_id}/run`: run one dataset or supplied custom questions. Metrics include Precision@K, Recall@K, MRR, vector latency, graph latency, total latency, and KG-RAG deltas.
+- `POST /benchmarks/collections/{collection_id}/run-all`: run all selected built-in datasets against the same collection.
+
+The Svelte knowledge-base detail page includes a `Benchmarks` tab that loads these datasets, runs a selected dataset or all tests, and displays aggregate metrics plus per-question retrieved files for baseline and KG-RAG.

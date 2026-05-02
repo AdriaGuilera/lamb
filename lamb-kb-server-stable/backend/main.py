@@ -104,7 +104,7 @@ app = FastAPI(
 from dependencies import verify_token
 
 # Import routers
-from routers import system, collections, graph
+from routers import system, collections, graph, benchmarks
 from routers import ingestion_status
 
 
@@ -152,6 +152,7 @@ async def startup_event():
 app.include_router(system.router)
 app.include_router(collections.router)
 app.include_router(graph.router)
+app.include_router(benchmarks.router)
 app.include_router(ingestion_status.router)
 
 # Configure static files
