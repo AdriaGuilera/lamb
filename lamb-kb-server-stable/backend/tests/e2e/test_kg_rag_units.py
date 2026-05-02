@@ -61,7 +61,9 @@ def _install_database_stubs(monkeypatch, chroma_client=None, collection=None):
     return service_module
 
 
-def _import_ingestion_service_with_stubs(monkeypatch, chroma_client=None, collection=None):
+def _import_ingestion_service_with_stubs(
+    monkeypatch, chroma_client=None, collection=None
+):
     _install_database_stubs(
         monkeypatch,
         chroma_client=chroma_client,
@@ -232,7 +234,11 @@ def test_kg_rag_query_expands_graph_chunks_and_attaches_trace(monkeypatch):
             return {
                 "entry_concepts": ["knowledge graph"],
                 "traversed_edges": [
-                    {"source": "knowledge graph", "target": "neo4j", "type": "stored_in"}
+                    {
+                        "source": "knowledge graph",
+                        "target": "neo4j",
+                        "type": "stored_in",
+                    }
                 ],
                 "expanded_chunk_ids": ["seed-1", "expanded-1"],
                 "latest_changes": [{"operation": "automatic_ingestion"}],
@@ -290,7 +296,9 @@ def test_simple_query_with_injected_chroma_keeps_baseline_shape(monkeypatch):
             self.query_calls = []
 
         def query(self, query_texts, n_results):
-            self.query_calls.append({"query_texts": query_texts, "n_results": n_results})
+            self.query_calls.append(
+                {"query_texts": query_texts, "n_results": n_results}
+            )
             return {
                 "documents": [["High confidence", "Filtered out"]],
                 "metadatas": [[{"document_id": "doc-1"}, {"document_id": "doc-2"}]],
@@ -624,7 +632,9 @@ def test_normal_ingestion_adds_chroma_documents_when_kg_rag_disabled(monkeypatch
     add_call = chroma_collection.add_calls[0]
     assert add_call["documents"] == ["First normal chunk", "Second normal chunk"]
     assert len(add_call["ids"]) == 2
-    assert all(metadata["filename"] == "normal.md" for metadata in add_call["metadatas"])
+    assert all(
+        metadata["filename"] == "normal.md" for metadata in add_call["metadatas"]
+    )
     assert all("document_id" in metadata for metadata in add_call["metadatas"])
     assert all("kg_rag" not in metadata for metadata in add_call["metadatas"])
 
