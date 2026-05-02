@@ -4,23 +4,18 @@ Database service module for managing collections.
 This module provides service functions for managing collections in both SQLite and ChromaDB.
 """
 
-import os
 import json
-import chromadb
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
-from datetime import datetime
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, asc
 from sqlalchemy.orm.attributes import flag_modified
 
 from .models import Collection, Visibility
-from .connection import get_db, get_chroma_client, get_embedding_function, get_embedding_function_by_params
+from .connection import get_chroma_client, get_embedding_function_by_params
 
 
 class CollectionService:
     """Service for managing collections in both SQLite and ChromaDB."""
-    
+
     @staticmethod
     def create_collection(
         db: Session,
@@ -28,10 +23,10 @@ class CollectionService:
         owner: str,
         description: Optional[str] = None,
         visibility: Visibility = Visibility.PRIVATE,
-        embeddings_model: Optional[Dict[str, Any]] = None
+        embeddings_model: Optional[Dict[str, Any]] = None,
     ) -> Collection:
         """Create a new collection in both SQLite and ChromaDB.
-        
+
         Args:
             db: SQLAlchemy database session
             name: Name of the collection
@@ -39,7 +34,7 @@ class CollectionService:
             description: Optional description
             visibility: Visibility setting (private or public)
             embeddings_model: Optional custom embeddings model configuration
-            
+
         Returns:
             The created Collection object
         """
@@ -48,40 +43,44 @@ class CollectionService:
             error_msg = "No embeddings model configuration provided. This is required for collection creation."
             print(f"ERROR: [create_collection] {error_msg}")
             raise ValueError(error_msg)
-        
+
         # Create ChromaDB collection
         chroma_client = get_chroma_client()
-        
+
         # Get the appropriate embedding function based on model configuration
         embedding_func = None
         if embeddings_model:
-            print(f"DEBUG: [create_collection] Using embedding config from dict - Model: {embeddings_model['model']}, Vendor: {embeddings_model['vendor']}")
+            print(
+                f"DEBUG: [create_collection] Using embedding config from dict - Model: {embeddings_model['model']}, Vendor: {embeddings_model['vendor']}"
+            )
             try:
                 embedding_func = get_embedding_function_by_params(
-                    vendor=embeddings_model['vendor'],
-                    model_name=embeddings_model['model'],
-                    api_key=embeddings_model.get('apikey', ''),
-                    api_endpoint=embeddings_model.get('api_endpoint', '')
+                    vendor=embeddings_model["vendor"],
+                    model_name=embeddings_model["model"],
+                    api_key=embeddings_model.get("apikey", ""),
+                    api_endpoint=embeddings_model.get("api_endpoint", ""),
                 )
             except Exception as e:
-                print(f"ERROR: [create_collection] Failed to create embedding function: {str(e)}")
+                print(
+                    f"ERROR: [create_collection] Failed to create embedding function: {str(e)}"
+                )
                 raise ValueError(f"Failed to create embedding function: {str(e)}")
-        
+
         # Prepare collection parameters
         collection_params = {
             "name": name,
             "metadata": {
                 "hnsw:space": "cosine",
-            }
+            },
         }
-        
+
         if embedding_func:
             collection_params["embedding_function"] = embedding_func
-        
+
         try:
             chroma_collection = chroma_client.create_collection(**collection_params)
-            print(f"DEBUG: [create_collection] Successfully created ChromaDB collection")
-            
+            print("DEBUG: [create_collection] Successfully created ChromaDB collection")
+
             # Create SQLite record
             db_collection = Collection(
                 name=name,
@@ -89,100 +88,106 @@ class CollectionService:
                 owner=owner,
                 visibility=visibility,
                 embeddings_model=embeddings_model,  # SQLAlchemy JSON column handles serialization
-                chromadb_uuid=str(chroma_collection.id)
+                chromadb_uuid=str(chroma_collection.id),
             )
             db.add(db_collection)
             db.commit()
             db.refresh(db_collection)
 
-
             return db_collection
 
         except Exception as e:
-            print(f"ERROR: [create_collection] Failed to create ChromaDB collection: {str(e)}")
+            print(
+                f"ERROR: [create_collection] Failed to create ChromaDB collection: {str(e)}"
+            )
 
             raise
-    
 
     @staticmethod
     def get_collection(db: Session, collection_id: int) -> Optional[Dict[str, Any]]:
         """Get a collection by ID.
-        
+
         Args:
             db: SQLAlchemy database session
             collection_id: ID of the collection to retrieve
-            
+
         Returns:
             The Collection as a dictionary if found, None otherwise
         """
         collection = db.query(Collection).filter(Collection.id == collection_id).first()
         if not collection:
             return None
-        
+
         collection_dict = collection.to_dict()
-            
+
         return collection_dict
-    
+
     @staticmethod
     def get_collection_by_name(db: Session, name: str) -> Optional[Collection]:
         """Get a collection by name.
-        
+
         Args:
             db: SQLAlchemy database session
             name: Name of the collection to retrieve
-            
+
         Returns:
             The Collection object if found, None otherwise
         """
         return db.query(Collection).filter(Collection.name == name).first()
-    
+
     @staticmethod
-    def get_collection_by_chromadb_uuid(db: Session, chromadb_uuid: str) -> Optional[Collection]:
+    def get_collection_by_chromadb_uuid(
+        db: Session, chromadb_uuid: str
+    ) -> Optional[Collection]:
         """Get a collection by ChromaDB UUID.
-        
+
         Args:
             db: SQLAlchemy database session
             chromadb_uuid: ChromaDB UUID of the collection to retrieve
-            
+
         Returns:
             The Collection object if found, None otherwise
         """
-        return db.query(Collection).filter(Collection.chromadb_uuid == chromadb_uuid).first()
-    
+        return (
+            db.query(Collection)
+            .filter(Collection.chromadb_uuid == chromadb_uuid)
+            .first()
+        )
+
     @staticmethod
     def list_collections(
         db: Session,
         owner: Optional[str] = None,
         visibility: Optional[Visibility] = None,
         skip: int = 0,
-        limit: int = 100
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """List collections with optional filtering.
-        
+
         Args:
             db: Database session
             owner: Optional filter by owner
             visibility: Optional filter by visibility
             skip: Number of collections to skip
             limit: Maximum number of collections to return
-            
+
         Returns:
             List of collections
         """
         # Build query
         query = db.query(Collection)
-        
+
         # Apply filters if provided
         if owner:
             query = query.filter(Collection.owner == owner)
         if visibility:
             query = query.filter(Collection.visibility == visibility)
-        
+
         # Apply pagination
         collections = query.offset(skip).limit(limit).all()
 
         return [col.to_dict() for col in collections]
-    
+
     @staticmethod
     def update_collection(
         db: Session,
@@ -193,7 +198,7 @@ class CollectionService:
         model: Optional[str] = None,
         vendor: Optional[str] = None,
         endpoint: Optional[str] = None,
-        apikey: Optional[str] = None
+        apikey: Optional[str] = None,
     ) -> Optional[Collection]:
         """
         Update a collection's SQLite record and rename ChromaDB collection if needed.
@@ -218,9 +223,9 @@ class CollectionService:
 
         # Disallow changing model or vendor
         current_conf = db_collection.embeddings_model or {}
-        if model is not None and model != current_conf.get('model'):
+        if model is not None and model != current_conf.get("model"):
             print("Changing 'model' is not supported and will be ignored.")
-        if vendor is not None and vendor != current_conf.get('vendor'):
+        if vendor is not None and vendor != current_conf.get("vendor"):
             print("Changing 'vendor' is not supported and will be ignored.")
 
         # Apply permitted updates
@@ -233,9 +238,9 @@ class CollectionService:
 
         # Only update endpoint and apikey
         if endpoint is not None:
-            current_conf['api_endpoint'] = endpoint
+            current_conf["api_endpoint"] = endpoint
         if apikey is not None:
-            current_conf['apikey'] = apikey
+            current_conf["apikey"] = apikey
         db_collection.embeddings_model = current_conf
 
         # Commit SQLite changes
@@ -250,7 +255,6 @@ class CollectionService:
 
         return db_collection
 
-    
     @staticmethod
     def delete_collection(db: Session, collection_id: int) -> bool:
         """Delete a collection from both SQLite and ChromaDB.
@@ -262,7 +266,9 @@ class CollectionService:
         Returns:
             True if deleted successfully, False otherwise
         """
-        db_collection = db.query(Collection).filter(Collection.id == collection_id).first()
+        db_collection = (
+            db.query(Collection).filter(Collection.id == collection_id).first()
+        )
 
         if not db_collection:
             return False
@@ -270,6 +276,13 @@ class CollectionService:
         # Delete from ChromaDB
         collection_name = db_collection.name
         chroma_client = get_chroma_client()
+        try:
+            from services.graph_store import get_graph_store
+
+            get_graph_store().delete_collection(collection_id)
+        except Exception as e:
+            print(f"Error deleting KG-RAG graph data: {e}")
+
         try:
             chroma_client.delete_collection(collection_name)
         except Exception as e:
@@ -283,9 +296,7 @@ class CollectionService:
 
     @staticmethod
     def bulk_update_embeddings_apikey(
-        db: Session,
-        owner: str,
-        apikey: str
+        db: Session, owner: str, apikey: str
     ) -> Dict[str, Any]:
         """Bulk update embeddings API key for all collections of an owner.
 
@@ -305,12 +316,7 @@ class CollectionService:
         collections = db.query(Collection).filter(Collection.owner == owner).all()
 
         if not collections:
-            return {
-                "total": 0,
-                "updated": 0,
-                "failed": 0,
-                "collections": []
-            }
+            return {"total": 0, "updated": 0, "failed": 0, "collections": []}
 
         updated_count = 0
         failed_count = 0
@@ -321,51 +327,54 @@ class CollectionService:
                 # Get current embeddings_model config
                 current_conf = collection.embeddings_model
                 original_was_string = isinstance(current_conf, str)
-                
+
                 if isinstance(current_conf, str):
                     current_conf = json.loads(current_conf)
                 elif current_conf is None:
                     current_conf = {}
 
                 # Update the API key
-                current_conf['apikey'] = apikey
+                current_conf["apikey"] = apikey
 
                 # Save back to database (preserve the original storage format)
                 if original_was_string:
                     collection.embeddings_model = json.dumps(current_conf)
                 else:
                     collection.embeddings_model = current_conf
-                
+
                 # Flag the column as modified so SQLAlchemy tracks the change
                 flag_modified(collection, "embeddings_model")
-                
-                updated_collections.append({
-                    "id": collection.id,
-                    "name": collection.name
-                })
+
+                updated_collections.append(
+                    {"id": collection.id, "name": collection.name}
+                )
                 updated_count += 1
 
             except Exception as e:
-                print(f"ERROR: [bulk_update_embeddings_apikey] Failed to update collection {collection.id}: {str(e)}")
+                print(
+                    f"ERROR: [bulk_update_embeddings_apikey] Failed to update collection {collection.id}: {str(e)}"
+                )
                 failed_count += 1
 
         # Commit all changes at once
         try:
             db.commit()
         except Exception as e:
-            print(f"ERROR: [bulk_update_embeddings_apikey] Failed to commit changes: {str(e)}")
+            print(
+                f"ERROR: [bulk_update_embeddings_apikey] Failed to commit changes: {str(e)}"
+            )
             db.rollback()
             return {
                 "total": len(collections),
                 "updated": 0,
                 "failed": len(collections),
                 "collections": [],
-                "error": str(e)
+                "error": str(e),
             }
 
         return {
             "total": len(collections),
             "updated": updated_count,
             "failed": failed_count,
-            "collections": updated_collections
+            "collections": updated_collections,
         }

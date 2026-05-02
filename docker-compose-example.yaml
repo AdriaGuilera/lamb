@@ -58,6 +58,17 @@ services:
       - PYTHONUNBUFFERED=1
       - GLOBAL_LOG_LEVEL=WARNING
       - KB_LOG_LEVEL=WARNING
+      - PLUGIN_KG_RAG_QUERY=${PLUGIN_KG_RAG_QUERY:-ADVANCED}
+      - KG_RAG_ENABLED=${KG_RAG_ENABLED:-false}
+      - KG_RAG_INDEX_ON_INGEST=${KG_RAG_INDEX_ON_INGEST:-true}
+      - KG_RAG_OPENAI_API_KEY=${KG_RAG_OPENAI_API_KEY:-}
+      - KG_RAG_CHAT_MODEL=${KG_RAG_CHAT_MODEL:-gpt-4o-mini}
+      - KG_RAG_EXTRACTION_MODEL=${KG_RAG_EXTRACTION_MODEL:-}
+      - KG_RAG_NEO4J_URI=${KG_RAG_NEO4J_URI:-bolt://neo4j:7687}
+      - KG_RAG_NEO4J_USER=${KG_RAG_NEO4J_USER:-neo4j}
+      - KG_RAG_NEO4J_PASSWORD=${KG_RAG_NEO4J_PASSWORD:-lamb-kg-rag-password}
+      - KG_RAG_GRAPH_DEPTH=${KG_RAG_GRAPH_DEPTH:-2}
+      - KG_RAG_LIMIT_FACTOR=${KG_RAG_LIMIT_FACTOR:-4}
     volumes:
       - ${LAMB_PROJECT_PATH}:${LAMB_PROJECT_PATH}
       - pip-cache:/root/.cache/pip
@@ -70,6 +81,29 @@ services:
       (test -f .env || cp .env.example .env) && \
       LOG_LEVEL=$$(echo \"$${KB_LOG_LEVEL:-$${GLOBAL_LOG_LEVEL:-WARNING}}\" | tr '[:upper:]' '[:lower:]') && \
       uvicorn main:app --host 0.0.0.0 --port 9090 --reload --log-level $$LOG_LEVEL --no-access-log"
+  neo4j:
+    image: neo4j:5-community
+    profiles: ["kg-rag"]
+    restart: unless-stopped
+    environment:
+      - KG_RAG_NEO4J_USER=${KG_RAG_NEO4J_USER:-neo4j}
+      - KG_RAG_NEO4J_PASSWORD=${KG_RAG_NEO4J_PASSWORD:-lamb-kg-rag-password}
+      - NEO4J_AUTH=${KG_RAG_NEO4J_USER:-neo4j}/${KG_RAG_NEO4J_PASSWORD:-lamb-kg-rag-password}
+      - NEO4J_server_memory_heap_initial__size=${NEO4J_HEAP_INITIAL_SIZE:-512m}
+      - NEO4J_server_memory_heap_max__size=${NEO4J_HEAP_MAX_SIZE:-1G}
+      - NEO4J_server_memory_pagecache_size=${NEO4J_PAGECACHE_SIZE:-512m}
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u $$KG_RAG_NEO4J_USER -p $$KG_RAG_NEO4J_PASSWORD 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
   library-manager:
     image: python:3.11-slim
     working_dir: ${LAMB_PROJECT_PATH}/library-manager/backend
@@ -160,3 +194,5 @@ networks:
     name: lamb-${COMPOSE_PROJECT_NAME:-default}
 volumes:
   pip-cache:
+  neo4j-data:
+  neo4j-logs:

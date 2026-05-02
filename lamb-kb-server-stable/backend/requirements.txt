@@ -15,6 +15,7 @@ firecrawl-py==4.8.0
 langchain-text-splitters>=0.3.0,<0.4.0
 ollama
 openai>=1.0.0
+neo4j>=5.14
 # Additional dependencies used in plugins
 # Removed duplicate firecrawl line (already pinned above)
 # pathlib and uuid are in the Python standard library; no need to install separately.

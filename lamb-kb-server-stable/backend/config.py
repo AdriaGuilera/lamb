@@ -19,13 +19,13 @@ CONFIG_FILE = Path(os.getenv("KB_CONFIG_PATH", "data/config.json"))
 
 def _load_config() -> Dict[str, Any]:
     """Load configuration from JSON file.
-    
+
     Returns:
         Dictionary with configuration values, empty dict if file doesn't exist
     """
     try:
         if CONFIG_FILE.exists():
-            with open(CONFIG_FILE, 'r') as f:
+            with open(CONFIG_FILE, "r") as f:
                 return json.load(f)
         return {}
     except json.JSONDecodeError as e:
@@ -38,18 +38,18 @@ def _load_config() -> Dict[str, Any]:
 
 def _save_config(config: Dict[str, Any]) -> bool:
     """Save configuration to JSON file.
-    
+
     Args:
         config: Dictionary with configuration values
-        
+
     Returns:
         True if save was successful, False otherwise
     """
     try:
         # Ensure data directory exists
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(CONFIG_FILE, 'w') as f:
+
+        with open(CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=2)
         return True
     except Exception as e:
@@ -59,21 +59,28 @@ def _save_config(config: Dict[str, Any]) -> bool:
 
 def get_embeddings_config() -> Dict[str, Any]:
     """Get embeddings configuration.
-    
+
     Returns the configured embeddings settings, falling back to environment variables
     if not set in the config file.
-    
+
     Returns:
         Dictionary with vendor, model, api_endpoint, and apikey
     """
     config = _load_config()
     embeddings_config = config.get("embeddings", {})
-    
+
     return {
-        "vendor": embeddings_config.get("vendor", os.getenv("EMBEDDINGS_VENDOR", "ollama")),
-        "model": embeddings_config.get("model", os.getenv("EMBEDDINGS_MODEL", "nomic-embed-text")),
-        "api_endpoint": embeddings_config.get("api_endpoint", os.getenv("EMBEDDINGS_ENDPOINT", "http://localhost:11434/api/embeddings")),
-        "apikey": embeddings_config.get("apikey", os.getenv("EMBEDDINGS_APIKEY", ""))
+        "vendor": embeddings_config.get(
+            "vendor", os.getenv("EMBEDDINGS_VENDOR", "ollama")
+        ),
+        "model": embeddings_config.get(
+            "model", os.getenv("EMBEDDINGS_MODEL", "nomic-embed-text")
+        ),
+        "api_endpoint": embeddings_config.get(
+            "api_endpoint",
+            os.getenv("EMBEDDINGS_ENDPOINT", "http://localhost:11434/api/embeddings"),
+        ),
+        "apikey": embeddings_config.get("apikey", os.getenv("EMBEDDINGS_APIKEY", "")),
     }
 
 
@@ -81,29 +88,29 @@ def update_embeddings_config(
     vendor: Optional[str] = None,
     model: Optional[str] = None,
     api_endpoint: Optional[str] = None,
-    apikey: Optional[str] = None
+    apikey: Optional[str] = None,
 ) -> bool:
     """Update embeddings configuration.
-    
+
     Only updates the fields that are provided (not None). The config file
     overrides environment variables for fields that are set.
-    
+
     Args:
         vendor: Embeddings vendor (e.g., 'ollama', 'local', 'openai')
         model: Model name
         api_endpoint: API endpoint URL
         apikey: API key for the embeddings service
-        
+
     Returns:
         True if update was successful, False otherwise
     """
     try:
         config = _load_config()
-        
+
         # Initialize embeddings config if it doesn't exist
         if "embeddings" not in config:
             config["embeddings"] = {}
-        
+
         # Update only provided fields
         if vendor is not None:
             config["embeddings"]["vendor"] = vendor
@@ -113,7 +120,7 @@ def update_embeddings_config(
             config["embeddings"]["api_endpoint"] = api_endpoint
         if apikey is not None:
             config["embeddings"]["apikey"] = apikey
-        
+
         return _save_config(config)
     except Exception as e:
         logger.error(f"Error updating embeddings config: {e}")
@@ -122,19 +129,19 @@ def update_embeddings_config(
 
 def reset_embeddings_config() -> bool:
     """Reset embeddings configuration to use environment variables.
-    
+
     Removes the embeddings configuration from the config file, causing
     the system to fall back to environment variables.
-    
+
     Returns:
         True if reset was successful, False otherwise
     """
     try:
         config = _load_config()
-        
+
         if "embeddings" in config:
             del config["embeddings"]
-            
+
         return _save_config(config)
     except Exception as e:
         logger.error(f"Error resetting embeddings config: {e}")
@@ -143,9 +150,66 @@ def reset_embeddings_config() -> bool:
 
 def has_embeddings_config() -> bool:
     """Check if embeddings configuration is set in the config file.
-    
+
     Returns:
         True if embeddings config exists in config file, False otherwise
     """
     config = _load_config()
     return "embeddings" in config
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "enable", "enabled"}
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        logger.warning(
+            "Invalid integer for %s=%s. Using default %s.", name, value, default
+        )
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def get_kg_rag_config() -> Dict[str, Any]:
+    """Get optional KG-RAG configuration.
+
+    KG-RAG is disabled by default. The graph pipeline is intentionally configured
+    from environment variables so existing deployments keep their current vector
+    ingestion and query behavior unless they opt in explicitly.
+    """
+    enabled = _env_bool("KG_RAG_ENABLED", False)
+    chat_model = os.getenv("KG_RAG_CHAT_MODEL") or os.getenv(
+        "OPENAI_CHAT_MODEL", "gpt-4o-mini"
+    )
+
+    return {
+        "enabled": enabled,
+        "index_on_ingest": _env_bool("KG_RAG_INDEX_ON_INGEST", True),
+        "openai_api_key": (
+            os.getenv("KG_RAG_OPENAI_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("EMBEDDINGS_APIKEY", "")
+        ),
+        "chat_model": chat_model,
+        "extraction_model": (
+            os.getenv("KG_RAG_EXTRACTION_MODEL")
+            or os.getenv("OPENAI_EXTRACTION_MODEL")
+            or chat_model
+        ),
+        "neo4j_uri": os.getenv("KG_RAG_NEO4J_URI") or os.getenv("NEO4J_URI", ""),
+        "neo4j_user": os.getenv("KG_RAG_NEO4J_USER")
+        or os.getenv("NEO4J_USER", "neo4j"),
+        "neo4j_password": os.getenv("KG_RAG_NEO4J_PASSWORD")
+        or os.getenv("NEO4J_PASSWORD", ""),
+        "graph_depth": _env_int("KG_RAG_GRAPH_DEPTH", 2, 1, 4),
+        "limit_factor": _env_int("KG_RAG_LIMIT_FACTOR", 4, 1, 20),
+    }
