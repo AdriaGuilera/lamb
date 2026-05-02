@@ -138,7 +138,10 @@ class GraphStoreSuccessTx:
                     "old_verification_state": "unverified",
                 }
             )
-        if "RETURN count(" in compact_query or "RETURN count(rel) AS count" in compact_query:
+        if (
+            "RETURN count(" in compact_query
+            or "RETURN count(rel) AS count" in compact_query
+        ):
             return FakeResult(single_row={"count": 1})
         return FakeResult()
 
@@ -162,7 +165,10 @@ class GraphStoreCoverageSession:
         compact_query = " ".join(query.split())
         if "CREATE CONSTRAINT" in compact_query or "CREATE INDEX" in compact_query:
             return FakeResult()
-        if "RETURN event.event_id AS event_id" in compact_query and "chunk_ids" not in compact_query:
+        if (
+            "RETURN event.event_id AS event_id" in compact_query
+            and "chunk_ids" not in compact_query
+        ):
             return FakeResult(
                 rows=[
                     {
@@ -180,7 +186,10 @@ class GraphStoreCoverageSession:
                     }
                 ]
             )
-        if "RETURN event.event_id AS event_id" in compact_query and "chunk_ids" in compact_query:
+        if (
+            "RETURN event.event_id AS event_id" in compact_query
+            and "chunk_ids" in compact_query
+        ):
             return FakeResult(
                 single_row={
                     "event_id": "event-1",
@@ -197,7 +206,10 @@ class GraphStoreCoverageSession:
                     "chunk_ids": ["chunk-1"],
                 }
             )
-        if "RETURN concept.name AS name," in compact_query and "chunk_count" in compact_query:
+        if (
+            "RETURN concept.name AS name," in compact_query
+            and "chunk_count" in compact_query
+        ):
             return FakeResult(
                 rows=[
                     {
@@ -239,7 +251,10 @@ class GraphStoreCoverageSession:
                     }
                 ]
             )
-        if "RETURN chunk.chunk_id AS chunk_id" in compact_query and "text_preview" in compact_query:
+        if (
+            "RETURN chunk.chunk_id AS chunk_id" in compact_query
+            and "text_preview" in compact_query
+        ):
             return FakeResult(
                 rows=[
                     {
@@ -274,8 +289,13 @@ class GraphStoreCoverageSession:
                     }
                 ]
             )
-        if "RETURN chunk.chunk_id AS chunk_id" in compact_query and "mentions" in compact_query:
-            return FakeResult(rows=[{"chunk_id": "chunk-1", "mentions": 1, "source_label": "Section"}])
+        if (
+            "RETURN chunk.chunk_id AS chunk_id" in compact_query
+            and "mentions" in compact_query
+        ):
+            return FakeResult(
+                rows=[{"chunk_id": "chunk-1", "mentions": 1, "source_label": "Section"}]
+            )
         if "RETURN event.operation AS operation" in compact_query:
             return FakeResult(
                 rows=[
@@ -433,7 +453,9 @@ def test_kg_rag_query_requires_db_and_chroma_collection():
         plugin.query(collection_id=1, query_text="x", db=object())
 
 
-def test_kg_rag_query_enabled_without_seed_chunks_returns_traced_empty_baseline(monkeypatch):
+def test_kg_rag_query_enabled_without_seed_chunks_returns_traced_empty_baseline(
+    monkeypatch,
+):
     class FakeChromaCollection:
         def query(self, query_texts, n_results):
             return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
@@ -514,7 +536,9 @@ def test_kg_rag_query_unconfigured_graph_returns_baseline_without_trace(monkeypa
         "plugins.kg_rag_query.config_module.get_kg_rag_config",
         lambda: {"enabled": True, "graph_depth": 2, "limit_factor": 4},
     )
-    monkeypatch.setattr("plugins.kg_rag_query.get_graph_store", lambda: FakeGraphStore())
+    monkeypatch.setattr(
+        "plugins.kg_rag_query.get_graph_store", lambda: FakeGraphStore()
+    )
 
     results = KGRAGQueryPlugin().query(
         collection_id=1,
@@ -525,7 +549,11 @@ def test_kg_rag_query_unconfigured_graph_returns_baseline_without_trace(monkeypa
     )
 
     assert results == [
-        {"similarity": pytest.approx(0.9), "data": "Seed", "metadata": {"document_id": "seed-1"}}
+        {
+            "similarity": pytest.approx(0.9),
+            "data": "Seed",
+            "metadata": {"document_id": "seed-1"},
+        }
     ]
 
 
@@ -564,7 +592,9 @@ def test_kg_rag_query_graph_expands_no_additional_chunks_warns(monkeypatch):
         "plugins.kg_rag_query.config_module.get_kg_rag_config",
         lambda: {"enabled": True, "graph_depth": 2, "limit_factor": 4},
     )
-    monkeypatch.setattr("plugins.kg_rag_query.get_graph_store", lambda: FakeGraphStore())
+    monkeypatch.setattr(
+        "plugins.kg_rag_query.get_graph_store", lambda: FakeGraphStore()
+    )
 
     results = KGRAGQueryPlugin().query(
         collection_id=1,
@@ -586,7 +616,10 @@ def test_kg_rag_query_private_helpers_cover_edge_cases():
     assert plugin._as_bool(None) is False
     assert plugin._as_bool("enabled") is True
     assert plugin._as_bool("off") is False
-    assert plugin._result_chunk_id({"metadata": {"child_chunk_id": "child-1"}}) == "child-1"
+    assert (
+        plugin._result_chunk_id({"metadata": {"child_chunk_id": "child-1"}})
+        == "child-1"
+    )
     assert plugin._result_chunk_id({"metadata": {"chunk_id": "chunk-1"}}) == "chunk-1"
 
     class MismatchedChromaCollection:
@@ -600,7 +633,11 @@ def test_kg_rag_query_private_helpers_cover_edge_cases():
     assert plugin._query_vector_baseline(
         MismatchedChromaCollection(), "query", top_k=2, threshold=0.0
     ) == [
-        {"similarity": pytest.approx(0.9), "data": "doc-1", "metadata": {"document_id": "doc-1"}}
+        {
+            "similarity": pytest.approx(0.9),
+            "data": "doc-1",
+            "metadata": {"document_id": "doc-1"},
+        }
     ]
 
     class RaisingChromaCollection:
@@ -620,7 +657,10 @@ def test_kg_rag_query_private_helpers_cover_edge_cases():
         {
             "similarity": 0.72,
             "data": "",
-            "metadata": {"document_id": "expanded-1", "kg_rag_origin": "graph_expansion"},
+            "metadata": {
+                "document_id": "expanded-1",
+                "kg_rag_origin": "graph_expansion",
+            },
         }
     ]
 
@@ -986,7 +1026,10 @@ def test_graph_store_collection_graph_no_concepts(monkeypatch):
     class EmptyConceptSession(GraphStoreCoverageSession):
         def run(self, query, **params):
             compact_query = " ".join(query.split())
-            if "RETURN concept.name AS name," in compact_query and "chunk_count" in compact_query:
+            if (
+                "RETURN concept.name AS name," in compact_query
+                and "chunk_count" in compact_query
+            ):
                 return FakeResult(rows=[])
             return super().run(query, **params)
 
@@ -1003,8 +1046,13 @@ def test_graph_store_collection_graph_skips_chunk_rows_without_ids(monkeypatch):
     class MissingChunkIdSession(GraphStoreCoverageSession):
         def run(self, query, **params):
             compact_query = " ".join(query.split())
-            if "RETURN chunk.chunk_id AS chunk_id" in compact_query and "text_preview" in compact_query:
-                return FakeResult(rows=[{"chunk_id": "", "concepts": ["knowledge graph"]}])
+            if (
+                "RETURN chunk.chunk_id AS chunk_id" in compact_query
+                and "text_preview" in compact_query
+            ):
+                return FakeResult(
+                    rows=[{"chunk_id": "", "concepts": ["knowledge graph"]}]
+                )
             return super().run(query, **params)
 
     graph_store = _configured_graph_store(monkeypatch)
@@ -1064,7 +1112,9 @@ def test_graph_store_curation_wrappers_and_transactions(monkeypatch):
     assert curation["ok"] is True
 
     tx = GraphStoreSuccessTx()
-    assert GraphStore._rename_concept_tx(tx, 5, "org-1", "", "x", "actor", "", "now") == {
+    assert GraphStore._rename_concept_tx(
+        tx, 5, "org-1", "", "x", "actor", "", "now"
+    ) == {
         "ok": False,
         "reason": "invalid_concept_name",
     }
@@ -1098,13 +1148,28 @@ def test_graph_store_curation_wrappers_and_transactions(monkeypatch):
     ) == {"ok": False, "reason": "invalid_concept_name"}
 
     monkeypatch.setattr(graph_store, "ensure_schema", lambda: False)
-    assert graph_store.revert_change(5, "org-1", "event")["reason"] == "neo4j_not_available"
-    assert graph_store.rename_concept(5, "org-1", "a", "b")["reason"] == "neo4j_not_available"
-    assert graph_store.merge_concepts(5, "org-1", ["a"], "b")["reason"] == "neo4j_not_available"
-    assert graph_store.edit_relationship(
-        5, "org-1", source_name="a", target_name="b", relation="r"
-    )["reason"] == "neo4j_not_available"
-    assert graph_store.update_concept_curation(5, "org-1", "a")["reason"] == "neo4j_not_available"
+    assert (
+        graph_store.revert_change(5, "org-1", "event")["reason"]
+        == "neo4j_not_available"
+    )
+    assert (
+        graph_store.rename_concept(5, "org-1", "a", "b")["reason"]
+        == "neo4j_not_available"
+    )
+    assert (
+        graph_store.merge_concepts(5, "org-1", ["a"], "b")["reason"]
+        == "neo4j_not_available"
+    )
+    assert (
+        graph_store.edit_relationship(
+            5, "org-1", source_name="a", target_name="b", relation="r"
+        )["reason"]
+        == "neo4j_not_available"
+    )
+    assert (
+        graph_store.update_concept_curation(5, "org-1", "a")["reason"]
+        == "neo4j_not_available"
+    )
 
 
 def test_graph_store_transaction_negative_paths():
@@ -1201,9 +1266,12 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
                 )
             return super().run(query, **params)
 
-    assert GraphStore._revert_change_tx(
-        FallbackPayloadTx(), 5, "org-1", "event-1", "actor", "", "now"
-    )["reverted"] is True
+    assert (
+        GraphStore._revert_change_tx(
+            FallbackPayloadTx(), 5, "org-1", "event-1", "actor", "", "now"
+        )["reverted"]
+        is True
+    )
 
     class BadPayloadTx(FallbackPayloadTx):
         def run(self, query, **params):
@@ -1218,16 +1286,23 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
                 )
             return super().run(query, **params)
 
-    assert GraphStore._revert_change_tx(
-        BadPayloadTx(), 5, "org-1", "event-1", "actor", "", "now"
-    )["reverted"] is True
+    assert (
+        GraphStore._revert_change_tx(
+            BadPayloadTx(), 5, "org-1", "event-1", "actor", "", "now"
+        )["reverted"]
+        is True
+    )
 
     chunks = [
         TextChunk(
             chunk_id="chunk-1",
             text="Knowledge graph text",
             parent_text="Parent text",
-            metadata={"filename": "kg.md", "parent_chunk_id": "parent-1", "section_title": "Intro"},
+            metadata={
+                "filename": "kg.md",
+                "parent_chunk_id": "parent-1",
+                "section_title": "Intro",
+            },
         )
     ]
     tx = GraphStoreSuccessTx()
@@ -1277,25 +1352,38 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
         ],
     )
     assert writes == 5
-    assert graph_store.ingest_chunks(
-        collection={"id": 5},
-        file_id=1,
-        filename="empty.md",
-        chunks=[],
-        concepts_by_chunk={},
-        entities={},
-        relationships=[],
-    ) == 0
+    assert (
+        graph_store.ingest_chunks(
+            collection={"id": 5},
+            file_id=1,
+            filename="empty.md",
+            chunks=[],
+            concepts_by_chunk={},
+            entities={},
+            relationships=[],
+        )
+        == 0
+    )
 
-    expansion = graph_store.expand_from_chunks(5, "org-1", ["chunk-1"], depth=99, limit=0)
+    expansion = graph_store.expand_from_chunks(
+        5, "org-1", ["chunk-1"], depth=99, limit=0
+    )
     assert expansion["entry_concepts"] == ["knowledge graph"]
     assert expansion["expanded_chunk_ids"] == ["chunk-1", "chunk-2"]
     assert expansion["traversed_edges"] == [
-        {"source": "knowledge graph", "target": "neo4j", "type": "stored_in", "weight": 1}
+        {
+            "source": "knowledge graph",
+            "target": "neo4j",
+            "type": "stored_in",
+            "weight": 1,
+        }
     ]
-    assert graph_store.expand_from_chunks(5, "org-1", [], depth=2, limit=10)[
-        "expanded_chunk_ids"
-    ] == []
+    assert (
+        graph_store.expand_from_chunks(5, "org-1", [], depth=2, limit=10)[
+            "expanded_chunk_ids"
+        ]
+        == []
+    )
 
     class NoEntryConceptSession(GraphStoreCoverageSession):
         def run(self, query, **params):
@@ -1305,24 +1393,30 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
             return super().run(query, **params)
 
     graph_store.driver.session_instance = NoEntryConceptSession()
-    assert graph_store.expand_from_chunks(5, "org-1", ["chunk-1"], depth=2, limit=10)[
-        "entry_concepts"
-    ] == []
+    assert (
+        graph_store.expand_from_chunks(5, "org-1", ["chunk-1"], depth=2, limit=10)[
+            "entry_concepts"
+        ]
+        == []
+    )
 
     monkeypatch.setattr(graph_store, "ensure_schema", lambda: False)
     skipped = graph_store.expand_from_chunks(5, "org-1", ["chunk-1"], depth=2, limit=10)
     assert skipped["latest_changes"] == [
         {"warning": "Neo4j is not configured or available; KG expansion skipped"}
     ]
-    assert graph_store.ingest_chunks(
-        collection={"id": 5},
-        file_id=1,
-        filename="kg.md",
-        chunks=chunks,
-        concepts_by_chunk={},
-        entities={},
-        relationships=[],
-    ) == 0
+    assert (
+        graph_store.ingest_chunks(
+            collection={"id": 5},
+            file_id=1,
+            filename="kg.md",
+            chunks=chunks,
+            concepts_by_chunk={},
+            entities={},
+            relationships=[],
+        )
+        == 0
+    )
 
     pair_chunks = [
         TextChunk(
@@ -1338,7 +1432,9 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
             metadata={"source": "s", "parent_chunk_id": "p"},
         ),
     ]
-    assert GraphStore._cooccurrences(pair_chunks, {"a": ["a", "b"], "b": ["b", "c"]}) == {
+    assert GraphStore._cooccurrences(
+        pair_chunks, {"a": ["a", "b"], "b": ["b", "c"]}
+    ) == {
         ("a", "b"),
         ("a", "c"),
         ("b", "c"),
@@ -1346,7 +1442,9 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
     duplicated_edges = [
         {"source": "a", "target": "b", "type": "r", "i": index} for index in range(82)
     ]
-    duplicated_edges.extend({"source": f"a-{index}", "target": "b", "type": "r"} for index in range(90))
+    duplicated_edges.extend(
+        {"source": f"a-{index}", "target": "b", "type": "r"} for index in range(90)
+    )
     assert len(GraphStore._dedupe_edges(duplicated_edges)) == 80
 
 
