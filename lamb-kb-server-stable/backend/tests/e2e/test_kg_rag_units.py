@@ -249,3 +249,22 @@ def test_edit_relationship_missing_relationship_returns_not_found():
     )
 
     assert result == {"ok": False, "reason": "relationship_not_found"}
+
+
+def test_collection_graph_unconfigured_returns_empty_snapshot():
+    graph_store = GraphStore(kg_config={"enabled": False})
+
+    snapshot = graph_store.get_collection_graph(
+        collection_id=1,
+        org_id="owner",
+        concept="Knowledge Graph",
+        document_id="doc-1",
+        include_chunks=True,
+        limit=20,
+    )
+
+    assert snapshot["collection_id"] == 1
+    assert snapshot["nodes"] == []
+    assert snapshot["edges"] == []
+    assert snapshot["filters"]["concept"] == "Knowledge Graph"
+    assert snapshot["counts"] == {"concepts": 0, "chunks": 0, "edges": 0}

@@ -85,6 +85,7 @@ If KG-RAG is disabled, Neo4j is not configured, no seed chunks are found, or gra
 
 The graph traceability API is exposed under `/graph` and uses the same bearer-token authentication as the rest of the KB server.
 
+- `GET /graph/collections/{collection_id}/snapshot`: return concept nodes, optional chunk nodes, and collection-scoped graph edges for the frontend visualization. Optional filters: `concept`, `document_id`, `include_chunks`, and `limit`.
 - `GET /graph/collections/{collection_id}/changes`: list graph change history for a collection. Optional filters: `concept`, `document_id`, `filename`, `operation`, and `limit`.
 - `GET /graph/collections/{collection_id}/changes/{event_id}`: inspect a single `ChangeEvent`, including related graph chunks when available.
 - `GET /graph/collections/{collection_id}/concepts/{concept}/changes`: inspect changes touching a concept.
@@ -101,3 +102,7 @@ Manual curation operations are collection-scoped and every successful operation 
 - `PATCH /graph/collections/{collection_id}/relationships`: edit a `RELATES_TO` relationship relation value, weight, description, evidence, notes, tags, or verification state.
 - `PATCH /graph/collections/{collection_id}/concepts/{concept}/curation`: add or update concept notes, tags, and verification state.
 - `PATCH /graph/collections/{collection_id}/relationships/curation`: add or update relationship notes, tags, and verification state without changing relation type or weight.
+
+## Frontend Graph View
+
+The Svelte knowledge-base detail page includes a `Graph` tab. It renders the snapshot endpoint as an SVG concept/chunk graph, supports concept/document/limit/chunk filters, shows change history, runs graph trace audits from seed chunk IDs, and exposes curation forms for users with modification permissions.

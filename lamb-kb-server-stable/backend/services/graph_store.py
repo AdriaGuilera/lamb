@@ -211,6 +211,231 @@ class GraphStore:
             ).single()
         return dict(row) if row else None
 
+    def get_collection_graph(
+        self,
+        collection_id: int,
+        org_id: str,
+        *,
+        concept: Optional[str] = None,
+        document_id: Optional[str] = None,
+        include_chunks: bool = True,
+        limit: int = 60,
+    ) -> Dict[str, Any]:
+        if not self.ensure_schema():
+            return {
+                "collection_id": collection_id,
+                "nodes": [],
+                "edges": [],
+                "filters": {
+                    "concept": concept or "",
+                    "document_id": document_id or "",
+                    "include_chunks": include_chunks,
+                    "limit": limit,
+                },
+                "counts": {"concepts": 0, "chunks": 0, "edges": 0},
+            }
+
+        limit = max(1, min(int(limit or 60), 200))
+        concept_filter = normalize_concept(concept or "") or None
+
+        with self.driver.session() as session:
+            concept_rows = session.run(
+                """
+                MATCH (concept:Concept {org_id: $org_id})
+                WHERE (
+                    EXISTS { MATCH (:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept) }
+                    OR EXISTS { MATCH (concept)-[rel:RELATES_TO]-(:Concept) WHERE rel.collection_id = $collection_id }
+                    OR EXISTS { MATCH (concept)-[rel:CO_OCCURS_WITH]-(:Concept) WHERE rel.collection_id = $collection_id }
+                )
+                  AND (
+                    $concept_filter IS NULL
+                    OR concept.name CONTAINS $concept_filter
+                    OR toLower(coalesce(concept.display_name, '')) CONTAINS $concept_filter
+                  )
+                  AND (
+                    $document_id IS NULL
+                    OR EXISTS {
+                        MATCH (:Document {document_id: $document_id})-[:CONTAINS]->(:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept)
+                    }
+                  )
+                OPTIONAL MATCH (concept)<-[:MENTIONS]-(chunk:Chunk {collection_id: $collection_id})
+                RETURN concept.name AS name,
+                       coalesce(concept.display_name, concept.name) AS display_name,
+                       coalesce(concept.entity_type, 'concept') AS entity_type,
+                       concept.description AS description,
+                       concept.notes AS notes,
+                       coalesce(concept.tags, []) AS tags,
+                       concept.verification_state AS verification_state,
+                       count(DISTINCT chunk) AS chunk_count
+                ORDER BY chunk_count DESC, display_name ASC
+                LIMIT $limit
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                concept_filter=concept_filter,
+                document_id=document_id,
+                limit=limit,
+            ).data()
+
+            concept_names = [row["name"] for row in concept_rows]
+            if not concept_names:
+                return {
+                    "collection_id": collection_id,
+                    "nodes": [],
+                    "edges": [],
+                    "filters": {
+                        "concept": concept or "",
+                        "document_id": document_id or "",
+                        "include_chunks": include_chunks,
+                        "limit": limit,
+                    },
+                    "counts": {"concepts": 0, "chunks": 0, "edges": 0},
+                }
+
+            relationship_rows = session.run(
+                """
+                MATCH (source:Concept {org_id: $org_id})-[rel:RELATES_TO|CO_OCCURS_WITH]->(target:Concept {org_id: $org_id})
+                WHERE rel.collection_id = $collection_id
+                  AND source.name IN $concept_names
+                  AND target.name IN $concept_names
+                RETURN source.name AS source,
+                       target.name AS target,
+                       type(rel) AS type,
+                       coalesce(rel.relation, type(rel)) AS relation,
+                       coalesce(rel.weight, 1.0) AS weight,
+                       rel.description AS description,
+                       rel.evidence AS evidence,
+                       rel.notes AS notes,
+                       coalesce(rel.tags, []) AS tags,
+                       rel.verification_state AS verification_state
+                ORDER BY weight DESC, source ASC, target ASC
+                LIMIT $edge_limit
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                concept_names=concept_names,
+                edge_limit=limit * 2,
+            ).data()
+
+            chunk_rows: List[Dict[str, Any]] = []
+            if include_chunks:
+                chunk_rows = session.run(
+                    """
+                    MATCH (doc:Document {collection_id: $collection_id})-[:CONTAINS]->(chunk:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept:Concept {org_id: $org_id})
+                    WHERE concept.name IN $concept_names
+                      AND ($document_id IS NULL OR doc.document_id = $document_id)
+                    WITH chunk, doc, collect(DISTINCT concept.name) AS concepts
+                    RETURN chunk.chunk_id AS chunk_id,
+                           coalesce(chunk.source_label, chunk.chunk_id) AS source_label,
+                           chunk.filename AS filename,
+                           doc.document_id AS document_id,
+                           left(coalesce(chunk.text, ''), 240) AS text_preview,
+                           concepts AS concepts
+                    ORDER BY filename ASC, source_label ASC
+                    LIMIT $chunk_limit
+                    """,
+                    collection_id=collection_id,
+                    org_id=org_id,
+                    concept_names=concept_names,
+                    document_id=document_id,
+                    chunk_limit=limit * 3,
+                ).data()
+
+        nodes: List[Dict[str, Any]] = []
+        edges: List[Dict[str, Any]] = []
+
+        for row in concept_rows:
+            nodes.append(
+                {
+                    "id": f"concept:{row['name']}",
+                    "type": "concept",
+                    "label": row.get("display_name") or row["name"],
+                    "data": {
+                        "name": row["name"],
+                        "entity_type": row.get("entity_type") or "concept",
+                        "description": row.get("description") or "",
+                        "notes": row.get("notes") or "",
+                        "tags": row.get("tags") or [],
+                        "verification_state": row.get("verification_state")
+                        or "unverified",
+                        "chunk_count": int(row.get("chunk_count") or 0),
+                    },
+                }
+            )
+
+        for row in relationship_rows:
+            edge_type = row.get("type") or "RELATES_TO"
+            relation = row.get("relation") or edge_type
+            edges.append(
+                {
+                    "id": f"relationship:{row['source']}:{relation}:{row['target']}",
+                    "type": edge_type,
+                    "source": f"concept:{row['source']}",
+                    "target": f"concept:{row['target']}",
+                    "label": relation,
+                    "weight": float(row.get("weight") or 1.0),
+                    "data": {
+                        "source": row["source"],
+                        "target": row["target"],
+                        "relation": relation,
+                        "description": row.get("description") or "",
+                        "evidence": row.get("evidence") or "",
+                        "notes": row.get("notes") or "",
+                        "tags": row.get("tags") or [],
+                        "verification_state": row.get("verification_state")
+                        or "unverified",
+                    },
+                }
+            )
+
+        for row in chunk_rows:
+            chunk_id = row.get("chunk_id")
+            if not chunk_id:
+                continue
+            nodes.append(
+                {
+                    "id": f"chunk:{chunk_id}",
+                    "type": "chunk",
+                    "label": row.get("source_label") or chunk_id,
+                    "data": {
+                        "chunk_id": chunk_id,
+                        "filename": row.get("filename") or "",
+                        "document_id": row.get("document_id") or "",
+                        "text_preview": row.get("text_preview") or "",
+                        "concepts": row.get("concepts") or [],
+                    },
+                }
+            )
+            for mentioned_concept in row.get("concepts") or []:
+                edges.append(
+                    {
+                        "id": f"mention:{chunk_id}:{mentioned_concept}",
+                        "type": "MENTIONS",
+                        "source": f"chunk:{chunk_id}",
+                        "target": f"concept:{mentioned_concept}",
+                        "label": "mentions",
+                        "weight": 1.0,
+                        "data": {"chunk_id": chunk_id, "concept": mentioned_concept},
+                    }
+                )
+
+        return {
+            "collection_id": collection_id,
+            "nodes": nodes,
+            "edges": edges,
+            "filters": {
+                "concept": concept or "",
+                "document_id": document_id or "",
+                "include_chunks": include_chunks,
+                "limit": limit,
+            },
+            "counts": {
+                "concepts": len(concept_rows),
+                "chunks": len(chunk_rows),
+                "edges": len(edges),
+            },
+        }
+
     def revert_change(
         self,
         collection_id: int,
@@ -762,11 +987,17 @@ class GraphStore:
             "source": source_name,
             "target": target_name,
             "mentions": mentions.get("count", 0) if mentions else 0,
-            "removed_between": removed_between.get("count", 0) if removed_between else 0,
+            "removed_between": (
+                removed_between.get("count", 0) if removed_between else 0
+            ),
             "outgoing_relationships": outgoing.get("count", 0) if outgoing else 0,
             "incoming_relationships": incoming.get("count", 0) if incoming else 0,
-            "outgoing_cooccurrences": outgoing_cooccurrences.get("count", 0) if outgoing_cooccurrences else 0,
-            "incoming_cooccurrences": incoming_cooccurrences.get("count", 0) if incoming_cooccurrences else 0,
+            "outgoing_cooccurrences": (
+                outgoing_cooccurrences.get("count", 0) if outgoing_cooccurrences else 0
+            ),
+            "incoming_cooccurrences": (
+                incoming_cooccurrences.get("count", 0) if incoming_cooccurrences else 0
+            ),
             "deleted_source": deleted_source.get("count", 0) if deleted_source else 0,
         }
 
@@ -817,7 +1048,12 @@ class GraphStore:
                 "move": move,
             },
         )
-        return {"ok": True, "operation": "manual_rename_concept", "event_id": event_id, "details": move}
+        return {
+            "ok": True,
+            "operation": "manual_rename_concept",
+            "event_id": event_id,
+            "details": move,
+        }
 
     @staticmethod
     def _merge_concepts_tx(
@@ -859,7 +1095,11 @@ class GraphStore:
                 missing.append(normalized_source)
 
         if not moved:
-            return {"ok": False, "reason": "source_concepts_not_found", "missing": missing}
+            return {
+                "ok": False,
+                "reason": "source_concepts_not_found",
+                "missing": missing,
+            }
 
         event_id = GraphStore._manual_change_event_tx(
             tx,
@@ -883,7 +1123,11 @@ class GraphStore:
             "ok": True,
             "operation": "manual_merge_concepts",
             "event_id": event_id,
-            "details": {"target": normalized_target, "moved": moved, "missing": missing},
+            "details": {
+                "target": normalized_target,
+                "moved": moved,
+                "missing": missing,
+            },
         }
 
     @staticmethod

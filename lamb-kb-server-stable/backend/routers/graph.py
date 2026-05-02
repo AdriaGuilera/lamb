@@ -21,6 +21,7 @@ from schemas.graph import (
     GraphRelationshipEditRequest,
     GraphRevertRequest,
     GraphRevertResponse,
+    GraphSnapshotResponse,
 )
 from services.graph_store import get_graph_store
 
@@ -43,6 +44,36 @@ def _graph_store_or_503():
     if not graph_store.is_available():
         raise HTTPException(status_code=503, detail="KG-RAG Neo4j is not available")
     return graph_store
+
+
+@router.get(
+    "/collections/{collection_id}/snapshot",
+    response_model=GraphSnapshotResponse,
+    summary="Get graph snapshot for visualization",
+)
+async def get_graph_snapshot(
+    collection_id: int,
+    concept: Optional[str] = Query(None, description="Filter concepts by name"),
+    document_id: Optional[str] = Query(
+        None, description="Filter graph around a document ID"
+    ),
+    include_chunks: bool = Query(
+        True, description="Include chunk nodes and MENTIONS edges"
+    ),
+    limit: int = Query(60, ge=1, le=200),
+    token: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    collection = _get_collection_or_404(db, collection_id)
+    graph_store = _graph_store_or_503()
+    return graph_store.get_collection_graph(
+        collection_id=collection_id,
+        org_id=str(collection.get("owner")),
+        concept=concept,
+        document_id=document_id,
+        include_chunks=include_chunks,
+        limit=limit,
+    )
 
 
 @router.get(

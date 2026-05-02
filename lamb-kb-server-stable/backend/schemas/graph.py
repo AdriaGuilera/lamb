@@ -64,12 +64,45 @@ class GraphAuditResponse(BaseModel):
     trace: Dict[str, Any] = Field(..., description="Graph expansion trace")
 
 
+class GraphNode(BaseModel):
+    id: str = Field(..., description="Stable frontend node ID")
+    type: str = Field(..., description="Node type, such as concept or chunk")
+    label: str = Field(..., description="Human-readable node label")
+    data: Dict[str, Any] = Field(default_factory=dict, description="Node metadata")
+
+
+class GraphEdge(BaseModel):
+    id: str = Field(..., description="Stable frontend edge ID")
+    type: str = Field(..., description="Graph edge type")
+    source: str = Field(..., description="Source node ID")
+    target: str = Field(..., description="Target node ID")
+    label: Optional[str] = Field(None, description="Human-readable edge label")
+    weight: Optional[float] = Field(None, description="Edge weight")
+    data: Dict[str, Any] = Field(default_factory=dict, description="Edge metadata")
+
+
+class GraphSnapshotResponse(BaseModel):
+    collection_id: int = Field(..., description="Collection ID")
+    nodes: List[GraphNode] = Field(default_factory=list, description="Graph nodes")
+    edges: List[GraphEdge] = Field(default_factory=list, description="Graph edges")
+    filters: Dict[str, Any] = Field(default_factory=dict, description="Applied filters")
+    counts: Dict[str, int] = Field(
+        default_factory=dict, description="Graph summary counts"
+    )
+
+
 class GraphManualOperationResponse(BaseModel):
     ok: bool = Field(..., description="Whether the manual graph operation was applied")
     operation: Optional[str] = Field(None, description="Recorded manual operation name")
-    event_id: Optional[str] = Field(None, description="ChangeEvent ID recorded for the operation")
-    reason: Optional[str] = Field(None, description="Reason when the operation was not applied")
-    details: Dict[str, Any] = Field(default_factory=dict, description="Operation-specific details")
+    event_id: Optional[str] = Field(
+        None, description="ChangeEvent ID recorded for the operation"
+    )
+    reason: Optional[str] = Field(
+        None, description="Reason when the operation was not applied"
+    )
+    details: Dict[str, Any] = Field(
+        default_factory=dict, description="Operation-specific details"
+    )
 
 
 class GraphConceptRenameRequest(BaseModel):
@@ -79,7 +112,9 @@ class GraphConceptRenameRequest(BaseModel):
 
 
 class GraphConceptMergeRequest(BaseModel):
-    source_names: List[str] = Field(..., description="Concept names to merge into the target")
+    source_names: List[str] = Field(
+        ..., description="Concept names to merge into the target"
+    )
     target_name: str = Field(..., description="Target concept name")
     actor: str = Field("graph-curation-api", description="Actor requesting the merge")
     reason: str = Field("", description="Human-readable reason for the merge")
@@ -97,7 +132,9 @@ class GraphRelationshipEditRequest(BaseModel):
     source_concept: str = Field(..., description="Source concept name")
     target_concept: str = Field(..., description="Target concept name")
     relation: str = Field(..., description="Current relationship relation value")
-    new_relation: Optional[str] = Field(None, description="New relationship relation value")
+    new_relation: Optional[str] = Field(
+        None, description="New relationship relation value"
+    )
     weight: Optional[float] = Field(None, description="New relationship weight")
     description: Optional[str] = Field(None, description="Relationship description")
     evidence: Optional[str] = Field(None, description="Relationship evidence")

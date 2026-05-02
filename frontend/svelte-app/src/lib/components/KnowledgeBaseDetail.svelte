@@ -7,6 +7,7 @@
     import { getApiUrl } from '$lib/config'; // Import getApiUrl
     import { browser } from '$app/environment'; // Import browser
     import ConfirmationModal from '$lib/components/modals/ConfirmationModal.svelte';
+    import KnowledgeBaseGraphView from '$lib/components/KnowledgeBaseGraphView.svelte';
     
     /** 
      * @typedef {import('$lib/services/knowledgeBaseService').IngestionPlugin} IngestionPlugin
@@ -144,8 +145,8 @@
     let serverOffline = $state(false);
 
     // Ingestion state
-    /** @type {'files' | 'ingest' | 'query'} */
-    let activeTab = $state('files'); // New state for tabs: 'files' or 'ingest' or 'query'
+    /** @type {'files' | 'ingest' | 'query' | 'graph'} */
+    let activeTab = $state('files'); // New state for tabs: 'files' or 'ingest' or 'query' or 'graph'
     /** @type {IngestionPlugin[]} */
     let plugins = $state([]);
     let loadingPlugins = $state(false);
@@ -336,7 +337,7 @@
     
     /**
      * Function to change active tab
-     * @param {'files' | 'ingest' | 'query'} tabName - The name of the tab to select
+      * @param {'files' | 'ingest' | 'query' | 'graph'} tabName - The name of the tab to select
      */
     function selectTab(tabName) {
         console.log('Selecting tab:', tabName);
@@ -1160,6 +1161,17 @@
                         >
                             {$_('knowledgeBases.detail.tabs.query', { default: 'Query' })}
                         </button>
+
+                        <!-- Graph Tab -->
+                        <button
+                            type="button"
+                            onclick={() => selectTab('graph')}
+                            class="{activeTab === 'graph' ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm"
+                            style={activeTab === 'graph' ? 'border-color: #2271b3; color: #2271b3;' : ''}
+                            aria-current={activeTab === 'graph' ? 'page' : undefined}
+                        >
+                            Graph
+                        </button>
                     </nav>
                 </div>
 
@@ -1716,6 +1728,11 @@
                             {/if}
                             
                         </div>
+                    {/if}
+
+                    <!-- Graph Tab Content -->
+                    {#if activeTab === 'graph'}
+                        <KnowledgeBaseGraphView kbId={kbId} canModify={kb.can_modify === true} />
                     {/if}
                 </div>
             </div>
