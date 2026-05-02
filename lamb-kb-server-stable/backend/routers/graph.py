@@ -11,8 +11,14 @@ from dependencies import verify_token
 from schemas.graph import (
     GraphAuditRequest,
     GraphAuditResponse,
+    GraphConceptCurationRequest,
+    GraphConceptMergeRequest,
+    GraphConceptRenameRequest,
     GraphChangeDetail,
     GraphChangeEvent,
+    GraphManualOperationResponse,
+    GraphRelationshipCurationRequest,
+    GraphRelationshipEditRequest,
     GraphRevertRequest,
     GraphRevertResponse,
 )
@@ -189,5 +195,152 @@ async def revert_graph_change(
             status_code=404, detail=f"Graph change {event_id} not found"
         )
     if not result.get("reverted"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@router.patch(
+    "/collections/{collection_id}/concepts/{concept}/rename",
+    response_model=GraphManualOperationResponse,
+    summary="Rename a graph concept in a collection",
+)
+async def rename_graph_concept(
+    collection_id: int,
+    concept: str,
+    request: GraphConceptRenameRequest,
+    token: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    collection = _get_collection_or_404(db, collection_id)
+    graph_store = _graph_store_or_503()
+    result = graph_store.rename_concept(
+        collection_id=collection_id,
+        org_id=str(collection.get("owner")),
+        old_name=concept,
+        new_name=request.new_name,
+        actor=request.actor,
+        reason=request.reason,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@router.post(
+    "/collections/{collection_id}/concepts/merge",
+    response_model=GraphManualOperationResponse,
+    summary="Merge graph concepts in a collection",
+)
+async def merge_graph_concepts(
+    collection_id: int,
+    request: GraphConceptMergeRequest,
+    token: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    collection = _get_collection_or_404(db, collection_id)
+    graph_store = _graph_store_or_503()
+    result = graph_store.merge_concepts(
+        collection_id=collection_id,
+        org_id=str(collection.get("owner")),
+        source_names=request.source_names,
+        target_name=request.target_name,
+        actor=request.actor,
+        reason=request.reason,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@router.patch(
+    "/collections/{collection_id}/concepts/{concept}/curation",
+    response_model=GraphManualOperationResponse,
+    summary="Update graph concept curation metadata",
+)
+async def curate_graph_concept(
+    collection_id: int,
+    concept: str,
+    request: GraphConceptCurationRequest,
+    token: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    collection = _get_collection_or_404(db, collection_id)
+    graph_store = _graph_store_or_503()
+    result = graph_store.update_concept_curation(
+        collection_id=collection_id,
+        org_id=str(collection.get("owner")),
+        concept_name=concept,
+        notes=request.notes,
+        tags=request.tags,
+        verification_state=request.verification_state,
+        actor=request.actor,
+        reason=request.reason,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@router.patch(
+    "/collections/{collection_id}/relationships",
+    response_model=GraphManualOperationResponse,
+    summary="Edit graph relationship type or weight",
+)
+async def edit_graph_relationship(
+    collection_id: int,
+    request: GraphRelationshipEditRequest,
+    token: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    collection = _get_collection_or_404(db, collection_id)
+    graph_store = _graph_store_or_503()
+    result = graph_store.edit_relationship(
+        collection_id=collection_id,
+        org_id=str(collection.get("owner")),
+        source_name=request.source_concept,
+        target_name=request.target_concept,
+        relation=request.relation,
+        new_relation=request.new_relation,
+        weight=request.weight,
+        description=request.description,
+        evidence=request.evidence,
+        notes=request.notes,
+        tags=request.tags,
+        verification_state=request.verification_state,
+        actor=request.actor,
+        reason=request.reason,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@router.patch(
+    "/collections/{collection_id}/relationships/curation",
+    response_model=GraphManualOperationResponse,
+    summary="Update graph relationship curation metadata",
+)
+async def curate_graph_relationship(
+    collection_id: int,
+    request: GraphRelationshipCurationRequest,
+    token: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    collection = _get_collection_or_404(db, collection_id)
+    graph_store = _graph_store_or_503()
+    result = graph_store.edit_relationship(
+        collection_id=collection_id,
+        org_id=str(collection.get("owner")),
+        source_name=request.source_concept,
+        target_name=request.target_concept,
+        relation=request.relation,
+        notes=request.notes,
+        tags=request.tags,
+        verification_state=request.verification_state,
+        actor=request.actor,
+        reason=request.reason,
+        operation="manual_curate_relationship",
+    )
+    if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
     return result

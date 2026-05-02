@@ -62,3 +62,58 @@ class GraphAuditResponse(BaseModel):
     collection_id: int = Field(..., description="Collection ID")
     seed_chunk_ids: List[str] = Field(..., description="Requested seed chunk IDs")
     trace: Dict[str, Any] = Field(..., description="Graph expansion trace")
+
+
+class GraphManualOperationResponse(BaseModel):
+    ok: bool = Field(..., description="Whether the manual graph operation was applied")
+    operation: Optional[str] = Field(None, description="Recorded manual operation name")
+    event_id: Optional[str] = Field(None, description="ChangeEvent ID recorded for the operation")
+    reason: Optional[str] = Field(None, description="Reason when the operation was not applied")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Operation-specific details")
+
+
+class GraphConceptRenameRequest(BaseModel):
+    new_name: str = Field(..., description="New concept name")
+    actor: str = Field("graph-curation-api", description="Actor requesting the rename")
+    reason: str = Field("", description="Human-readable reason for the rename")
+
+
+class GraphConceptMergeRequest(BaseModel):
+    source_names: List[str] = Field(..., description="Concept names to merge into the target")
+    target_name: str = Field(..., description="Target concept name")
+    actor: str = Field("graph-curation-api", description="Actor requesting the merge")
+    reason: str = Field("", description="Human-readable reason for the merge")
+
+
+class GraphConceptCurationRequest(BaseModel):
+    notes: Optional[str] = Field(None, description="Manual curation notes")
+    tags: Optional[List[str]] = Field(None, description="Manual curation tags")
+    verification_state: Optional[str] = Field(None, description="Verification state")
+    actor: str = Field("graph-curation-api", description="Actor requesting the update")
+    reason: str = Field("", description="Human-readable reason for the update")
+
+
+class GraphRelationshipEditRequest(BaseModel):
+    source_concept: str = Field(..., description="Source concept name")
+    target_concept: str = Field(..., description="Target concept name")
+    relation: str = Field(..., description="Current relationship relation value")
+    new_relation: Optional[str] = Field(None, description="New relationship relation value")
+    weight: Optional[float] = Field(None, description="New relationship weight")
+    description: Optional[str] = Field(None, description="Relationship description")
+    evidence: Optional[str] = Field(None, description="Relationship evidence")
+    notes: Optional[str] = Field(None, description="Manual curation notes")
+    tags: Optional[List[str]] = Field(None, description="Manual curation tags")
+    verification_state: Optional[str] = Field(None, description="Verification state")
+    actor: str = Field("graph-curation-api", description="Actor requesting the update")
+    reason: str = Field("", description="Human-readable reason for the update")
+
+
+class GraphRelationshipCurationRequest(BaseModel):
+    source_concept: str = Field(..., description="Source concept name")
+    target_concept: str = Field(..., description="Target concept name")
+    relation: str = Field(..., description="Current relationship relation value")
+    notes: Optional[str] = Field(None, description="Manual curation notes")
+    tags: Optional[List[str]] = Field(None, description="Manual curation tags")
+    verification_state: Optional[str] = Field(None, description="Verification state")
+    actor: str = Field("graph-curation-api", description="Actor requesting the update")
+    reason: str = Field("", description="Human-readable reason for the update")

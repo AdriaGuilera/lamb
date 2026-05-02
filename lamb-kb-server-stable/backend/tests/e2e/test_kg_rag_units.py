@@ -175,3 +175,77 @@ def test_revert_change_rejects_unsupported_operation():
     assert result["reverted"] is False
     assert result["reason"] == "unsupported_operation"
     assert result["operation"] == "manual_edit"
+
+
+def test_rename_concept_missing_source_returns_not_found():
+    class FakeTx:
+        def run(self, query, **params):
+            class Result:
+                def single(self):
+                    return None
+
+            return Result()
+
+    result = GraphStore._rename_concept_tx(
+        FakeTx(),
+        collection_id=1,
+        org_id="owner",
+        old_name="Old Concept",
+        new_name="New Concept",
+        actor="test",
+        reason="test",
+        timestamp="2026-05-02T00:00:00Z",
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "source_concept_not_found"
+
+
+def test_merge_concepts_rejects_empty_effective_sources():
+    class FakeTx:
+        pass
+
+    result = GraphStore._merge_concepts_tx(
+        FakeTx(),
+        collection_id=1,
+        org_id="owner",
+        source_names=["Target Concept"],
+        target_name="Target Concept",
+        actor="test",
+        reason="test",
+        timestamp="2026-05-02T00:00:00Z",
+    )
+
+    assert result == {"ok": False, "reason": "invalid_merge_request"}
+
+
+def test_edit_relationship_missing_relationship_returns_not_found():
+    class FakeTx:
+        def run(self, query, **params):
+            class Result:
+                def single(self):
+                    return None
+
+            return Result()
+
+    result = GraphStore._edit_relationship_tx(
+        FakeTx(),
+        collection_id=1,
+        org_id="owner",
+        source_name="Knowledge Graph",
+        target_name="Neo4j",
+        relation="stored in",
+        new_relation="implemented by",
+        weight=2.0,
+        description=None,
+        evidence=None,
+        notes=None,
+        tags=None,
+        verification_state=None,
+        actor="test",
+        reason="test",
+        operation="manual_edit_relationship",
+        timestamp="2026-05-02T00:00:00Z",
+    )
+
+    assert result == {"ok": False, "reason": "relationship_not_found"}

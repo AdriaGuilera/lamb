@@ -14,6 +14,8 @@ from services.concept_extraction import (
     ExtractedEntity,
     ExtractedRelationship,
     TextChunk,
+    normalize_concept,
+    normalize_relation,
 )
 
 try:
@@ -415,6 +417,685 @@ class GraphStore:
             "operation": operation,
             "document_id": document_id,
             "chunk_ids": chunk_ids,
+        }
+
+    def rename_concept(
+        self,
+        collection_id: int,
+        org_id: str,
+        old_name: str,
+        new_name: str,
+        *,
+        actor: str = "graph-curation-api",
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        if not self.ensure_schema():
+            return {"ok": False, "reason": "neo4j_not_available"}
+        timestamp = utc_now()
+        with self.driver.session() as session:
+            return session.execute_write(
+                self._rename_concept_tx,
+                collection_id,
+                org_id,
+                old_name,
+                new_name,
+                actor,
+                reason,
+                timestamp,
+            )
+
+    def merge_concepts(
+        self,
+        collection_id: int,
+        org_id: str,
+        source_names: List[str],
+        target_name: str,
+        *,
+        actor: str = "graph-curation-api",
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        if not self.ensure_schema():
+            return {"ok": False, "reason": "neo4j_not_available"}
+        timestamp = utc_now()
+        with self.driver.session() as session:
+            return session.execute_write(
+                self._merge_concepts_tx,
+                collection_id,
+                org_id,
+                source_names,
+                target_name,
+                actor,
+                reason,
+                timestamp,
+            )
+
+    def edit_relationship(
+        self,
+        collection_id: int,
+        org_id: str,
+        *,
+        source_name: str,
+        target_name: str,
+        relation: str,
+        new_relation: Optional[str] = None,
+        weight: Optional[float] = None,
+        description: Optional[str] = None,
+        evidence: Optional[str] = None,
+        notes: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        verification_state: Optional[str] = None,
+        actor: str = "graph-curation-api",
+        reason: str = "",
+        operation: str = "manual_edit_relationship",
+    ) -> Dict[str, Any]:
+        if not self.ensure_schema():
+            return {"ok": False, "reason": "neo4j_not_available"}
+        timestamp = utc_now()
+        with self.driver.session() as session:
+            return session.execute_write(
+                self._edit_relationship_tx,
+                collection_id,
+                org_id,
+                source_name,
+                target_name,
+                relation,
+                new_relation,
+                weight,
+                description,
+                evidence,
+                notes,
+                tags,
+                verification_state,
+                actor,
+                reason,
+                operation,
+                timestamp,
+            )
+
+    def update_concept_curation(
+        self,
+        collection_id: int,
+        org_id: str,
+        concept_name: str,
+        *,
+        notes: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        verification_state: Optional[str] = None,
+        actor: str = "graph-curation-api",
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        if not self.ensure_schema():
+            return {"ok": False, "reason": "neo4j_not_available"}
+        timestamp = utc_now()
+        with self.driver.session() as session:
+            return session.execute_write(
+                self._update_concept_curation_tx,
+                collection_id,
+                org_id,
+                concept_name,
+                notes,
+                tags,
+                verification_state,
+                actor,
+                reason,
+                timestamp,
+            )
+
+    @staticmethod
+    def _manual_change_event_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        operation: str,
+        actor: str,
+        timestamp: str,
+        concepts: List[str],
+        payload: Dict[str, Any],
+    ) -> Optional[str]:
+        row = tx.run(
+            """
+            CREATE (event:ChangeEvent {
+              event_id: randomUUID(),
+              collection_id: $collection_id,
+              org_id: $org_id,
+              operation: $operation,
+              actor: $actor,
+              timestamp: $timestamp,
+              filename: '',
+              concepts: $concepts,
+              payload_json: $payload_json
+            })
+            RETURN event.event_id AS event_id
+            """,
+            collection_id=collection_id,
+            org_id=org_id,
+            operation=operation,
+            actor=actor,
+            timestamp=timestamp,
+            concepts=sorted({concept for concept in concepts if concept}),
+            payload_json=json.dumps(payload, ensure_ascii=False),
+        ).single()
+        return row.get("event_id") if row else None
+
+    @staticmethod
+    def _concept_is_used_query() -> str:
+        return """
+            MATCH (concept:Concept {org_id: $org_id, name: $concept})
+            WHERE EXISTS { MATCH (:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept) }
+               OR EXISTS { MATCH (concept)-[rel:RELATES_TO]-(:Concept) WHERE rel.collection_id = $collection_id }
+               OR EXISTS { MATCH (concept)-[rel:CO_OCCURS_WITH]-(:Concept) WHERE rel.collection_id = $collection_id }
+            RETURN concept.name AS name,
+                   concept.notes AS old_notes,
+                   concept.tags AS old_tags,
+                   concept.verification_state AS old_verification_state
+        """
+
+    @staticmethod
+    def _move_concept_in_collection_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        source_name: str,
+        target_name: str,
+        target_display_name: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        source_row = tx.run(
+            GraphStore._concept_is_used_query(),
+            collection_id=collection_id,
+            org_id=org_id,
+            concept=source_name,
+        ).single()
+        if not source_row:
+            return {"moved": False, "reason": "source_concept_not_found"}
+
+        tx.run(
+            """
+            MERGE (target:Concept {org_id: $org_id, name: $target})
+              ON CREATE SET target.created_at = $timestamp,
+                            target.entity_type = 'concept',
+                            target.sources = []
+            SET target.updated_at = $timestamp,
+                target.display_name = $target_display_name,
+                target.collection_hint = $collection_id
+            """,
+            org_id=org_id,
+            target=target_name,
+            target_display_name=target_display_name,
+            collection_id=collection_id,
+            timestamp=timestamp,
+        )
+
+        removed_between = tx.run(
+            """
+            MATCH (source:Concept {org_id: $org_id, name: $source})-[rel]-(target:Concept {org_id: $org_id, name: $target})
+            WHERE rel.collection_id = $collection_id
+            DELETE rel
+            RETURN count(rel) AS count
+            """,
+            org_id=org_id,
+            source=source_name,
+            target=target_name,
+            collection_id=collection_id,
+        ).single()
+
+        mentions = tx.run(
+            """
+            MATCH (target:Concept {org_id: $org_id, name: $target})
+            MATCH (chunk:Chunk {collection_id: $collection_id})-[mention:MENTIONS]->(source:Concept {org_id: $org_id, name: $source})
+            MERGE (chunk)-[newMention:MENTIONS]->(target)
+              ON CREATE SET newMention.created_at = $timestamp
+            SET newMention.collection_id = $collection_id
+            DELETE mention
+            RETURN count(mention) AS count
+            """,
+            org_id=org_id,
+            source=source_name,
+            target=target_name,
+            collection_id=collection_id,
+            timestamp=timestamp,
+        ).single()
+
+        outgoing = tx.run(
+            """
+            MATCH (target:Concept {org_id: $org_id, name: $target})
+            MATCH (source:Concept {org_id: $org_id, name: $source})-[rel:RELATES_TO {collection_id: $collection_id}]->(other:Concept {org_id: $org_id})
+            WHERE other.name <> $target
+            WITH target, other, rel, coalesce(rel.relation, 'related_to') AS relation
+            MERGE (target)-[newRel:RELATES_TO {collection_id: $collection_id, relation: relation}]->(other)
+              ON CREATE SET newRel.created_at = $timestamp,
+                            newRel.weight = 0
+            SET newRel.weight = coalesce(newRel.weight, 0) + coalesce(rel.weight, 1),
+                newRel.updated_at = $timestamp,
+                newRel.description = coalesce(rel.description, newRel.description, ''),
+                newRel.evidence = coalesce(rel.evidence, newRel.evidence, ''),
+                newRel.chunk_id = coalesce(rel.chunk_id, newRel.chunk_id, '')
+            DELETE rel
+            RETURN count(rel) AS count
+            """,
+            org_id=org_id,
+            source=source_name,
+            target=target_name,
+            collection_id=collection_id,
+            timestamp=timestamp,
+        ).single()
+
+        incoming = tx.run(
+            """
+            MATCH (target:Concept {org_id: $org_id, name: $target})
+            MATCH (other:Concept {org_id: $org_id})-[rel:RELATES_TO {collection_id: $collection_id}]->(source:Concept {org_id: $org_id, name: $source})
+            WHERE other.name <> $target
+            WITH target, other, rel, coalesce(rel.relation, 'related_to') AS relation
+            MERGE (other)-[newRel:RELATES_TO {collection_id: $collection_id, relation: relation}]->(target)
+              ON CREATE SET newRel.created_at = $timestamp,
+                            newRel.weight = 0
+            SET newRel.weight = coalesce(newRel.weight, 0) + coalesce(rel.weight, 1),
+                newRel.updated_at = $timestamp,
+                newRel.description = coalesce(rel.description, newRel.description, ''),
+                newRel.evidence = coalesce(rel.evidence, newRel.evidence, ''),
+                newRel.chunk_id = coalesce(rel.chunk_id, newRel.chunk_id, '')
+            DELETE rel
+            RETURN count(rel) AS count
+            """,
+            org_id=org_id,
+            source=source_name,
+            target=target_name,
+            collection_id=collection_id,
+            timestamp=timestamp,
+        ).single()
+
+        outgoing_cooccurrences = tx.run(
+            """
+            MATCH (target:Concept {org_id: $org_id, name: $target})
+            MATCH (source:Concept {org_id: $org_id, name: $source})-[rel:CO_OCCURS_WITH {collection_id: $collection_id}]->(other:Concept {org_id: $org_id})
+            WHERE other.name <> $target
+            MERGE (target)-[newRel:CO_OCCURS_WITH {collection_id: $collection_id}]->(other)
+              ON CREATE SET newRel.created_at = $timestamp,
+                            newRel.weight = 0
+            SET newRel.weight = coalesce(newRel.weight, 0) + coalesce(rel.weight, 1),
+                newRel.updated_at = $timestamp
+            DELETE rel
+            RETURN count(rel) AS count
+            """,
+            org_id=org_id,
+            source=source_name,
+            target=target_name,
+            collection_id=collection_id,
+            timestamp=timestamp,
+        ).single()
+
+        incoming_cooccurrences = tx.run(
+            """
+            MATCH (target:Concept {org_id: $org_id, name: $target})
+            MATCH (other:Concept {org_id: $org_id})-[rel:CO_OCCURS_WITH {collection_id: $collection_id}]->(source:Concept {org_id: $org_id, name: $source})
+            WHERE other.name <> $target
+            MERGE (other)-[newRel:CO_OCCURS_WITH {collection_id: $collection_id}]->(target)
+              ON CREATE SET newRel.created_at = $timestamp,
+                            newRel.weight = 0
+            SET newRel.weight = coalesce(newRel.weight, 0) + coalesce(rel.weight, 1),
+                newRel.updated_at = $timestamp
+            DELETE rel
+            RETURN count(rel) AS count
+            """,
+            org_id=org_id,
+            source=source_name,
+            target=target_name,
+            collection_id=collection_id,
+            timestamp=timestamp,
+        ).single()
+
+        deleted_source = tx.run(
+            """
+            MATCH (source:Concept {org_id: $org_id, name: $source})
+            WHERE NOT EXISTS { MATCH (:Chunk)-[:MENTIONS]->(source) }
+              AND NOT EXISTS { MATCH (source)-[:RELATES_TO]-(:Concept) }
+              AND NOT EXISTS { MATCH (source)-[:CO_OCCURS_WITH]-(:Concept) }
+            DETACH DELETE source
+            RETURN count(source) AS count
+            """,
+            org_id=org_id,
+            source=source_name,
+        ).single()
+
+        return {
+            "moved": True,
+            "source": source_name,
+            "target": target_name,
+            "mentions": mentions.get("count", 0) if mentions else 0,
+            "removed_between": removed_between.get("count", 0) if removed_between else 0,
+            "outgoing_relationships": outgoing.get("count", 0) if outgoing else 0,
+            "incoming_relationships": incoming.get("count", 0) if incoming else 0,
+            "outgoing_cooccurrences": outgoing_cooccurrences.get("count", 0) if outgoing_cooccurrences else 0,
+            "incoming_cooccurrences": incoming_cooccurrences.get("count", 0) if incoming_cooccurrences else 0,
+            "deleted_source": deleted_source.get("count", 0) if deleted_source else 0,
+        }
+
+    @staticmethod
+    def _rename_concept_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        old_name: str,
+        new_name: str,
+        actor: str,
+        reason: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        source_name = normalize_concept(old_name)
+        target_name = normalize_concept(new_name)
+        if not source_name or not target_name:
+            return {"ok": False, "reason": "invalid_concept_name"}
+        if source_name == target_name:
+            return {"ok": False, "reason": "concept_names_are_equal"}
+
+        move = GraphStore._move_concept_in_collection_tx(
+            tx,
+            collection_id,
+            org_id,
+            source_name,
+            target_name,
+            new_name.strip() or target_name,
+            timestamp,
+        )
+        if not move.get("moved"):
+            return {"ok": False, **move}
+
+        event_id = GraphStore._manual_change_event_tx(
+            tx,
+            collection_id,
+            org_id,
+            "manual_rename_concept",
+            actor,
+            timestamp,
+            [source_name, target_name],
+            {
+                "old_name": old_name,
+                "new_name": new_name,
+                "normalized_old_name": source_name,
+                "normalized_new_name": target_name,
+                "reason": reason,
+                "move": move,
+            },
+        )
+        return {"ok": True, "operation": "manual_rename_concept", "event_id": event_id, "details": move}
+
+    @staticmethod
+    def _merge_concepts_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        source_names: List[str],
+        target_name: str,
+        actor: str,
+        reason: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        normalized_target = normalize_concept(target_name)
+        normalized_sources = []
+        for source_name in source_names:
+            normalized_source = normalize_concept(source_name)
+            if normalized_source and normalized_source != normalized_target:
+                normalized_sources.append(normalized_source)
+        normalized_sources = sorted(set(normalized_sources))
+
+        if not normalized_target or not normalized_sources:
+            return {"ok": False, "reason": "invalid_merge_request"}
+
+        moved = []
+        missing = []
+        for normalized_source in normalized_sources:
+            move = GraphStore._move_concept_in_collection_tx(
+                tx,
+                collection_id,
+                org_id,
+                normalized_source,
+                normalized_target,
+                target_name.strip() or normalized_target,
+                timestamp,
+            )
+            if move.get("moved"):
+                moved.append(move)
+            else:
+                missing.append(normalized_source)
+
+        if not moved:
+            return {"ok": False, "reason": "source_concepts_not_found", "missing": missing}
+
+        event_id = GraphStore._manual_change_event_tx(
+            tx,
+            collection_id,
+            org_id,
+            "manual_merge_concepts",
+            actor,
+            timestamp,
+            [normalized_target, *normalized_sources],
+            {
+                "target_name": target_name,
+                "normalized_target_name": normalized_target,
+                "source_names": source_names,
+                "normalized_source_names": normalized_sources,
+                "missing_source_names": missing,
+                "reason": reason,
+                "moves": moved,
+            },
+        )
+        return {
+            "ok": True,
+            "operation": "manual_merge_concepts",
+            "event_id": event_id,
+            "details": {"target": normalized_target, "moved": moved, "missing": missing},
+        }
+
+    @staticmethod
+    def _edit_relationship_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        source_name: str,
+        target_name: str,
+        relation: str,
+        new_relation: Optional[str],
+        weight: Optional[float],
+        description: Optional[str],
+        evidence: Optional[str],
+        notes: Optional[str],
+        tags: Optional[List[str]],
+        verification_state: Optional[str],
+        actor: str,
+        reason: str,
+        operation: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        source = normalize_concept(source_name)
+        target = normalize_concept(target_name)
+        current_relation = normalize_relation(relation)
+        target_relation = normalize_relation(new_relation or relation)
+        if not source or not target or not current_relation:
+            return {"ok": False, "reason": "invalid_relationship_identity"}
+
+        rel_row = tx.run(
+            """
+            MATCH (source:Concept {org_id: $org_id, name: $source})-[rel:RELATES_TO {collection_id: $collection_id, relation: $relation}]->(target:Concept {org_id: $org_id, name: $target})
+            RETURN rel.weight AS old_weight,
+                   rel.description AS old_description,
+                   rel.evidence AS old_evidence,
+                   rel.notes AS old_notes,
+                   rel.tags AS old_tags,
+                   rel.verification_state AS old_verification_state
+            """,
+            org_id=org_id,
+            collection_id=collection_id,
+            source=source,
+            target=target,
+            relation=current_relation,
+        ).single()
+        if not rel_row:
+            return {"ok": False, "reason": "relationship_not_found"}
+
+        if target_relation == current_relation:
+            tx.run(
+                """
+                MATCH (source:Concept {org_id: $org_id, name: $source})-[rel:RELATES_TO {collection_id: $collection_id, relation: $relation}]->(target:Concept {org_id: $org_id, name: $target})
+                SET rel.updated_at = $timestamp,
+                    rel.weight = CASE WHEN $weight IS NULL THEN rel.weight ELSE $weight END,
+                    rel.description = CASE WHEN $description IS NULL THEN rel.description ELSE $description END,
+                    rel.evidence = CASE WHEN $evidence IS NULL THEN rel.evidence ELSE $evidence END,
+                    rel.notes = CASE WHEN $notes IS NULL THEN rel.notes ELSE $notes END,
+                    rel.tags = CASE WHEN $tags IS NULL THEN rel.tags ELSE $tags END,
+                    rel.verification_state = CASE WHEN $verification_state IS NULL THEN rel.verification_state ELSE $verification_state END
+                """,
+                org_id=org_id,
+                collection_id=collection_id,
+                source=source,
+                target=target,
+                relation=current_relation,
+                weight=weight,
+                description=description,
+                evidence=evidence,
+                notes=notes,
+                tags=tags,
+                verification_state=verification_state,
+                timestamp=timestamp,
+            )
+        else:
+            tx.run(
+                """
+                MATCH (source:Concept {org_id: $org_id, name: $source})-[oldRel:RELATES_TO {collection_id: $collection_id, relation: $current_relation}]->(target:Concept {org_id: $org_id, name: $target})
+                WITH source, target, oldRel,
+                     coalesce(oldRel.weight, 1.0) AS old_weight,
+                     oldRel.description AS old_description,
+                     oldRel.evidence AS old_evidence,
+                     oldRel.notes AS old_notes,
+                     oldRel.tags AS old_tags,
+                     oldRel.verification_state AS old_verification_state
+                MERGE (source)-[rel:RELATES_TO {collection_id: $collection_id, relation: $target_relation}]->(target)
+                  ON CREATE SET rel.created_at = $timestamp
+                SET rel.updated_at = $timestamp,
+                    rel.weight = CASE WHEN $weight IS NULL THEN old_weight ELSE $weight END,
+                    rel.description = CASE WHEN $description IS NULL THEN old_description ELSE $description END,
+                    rel.evidence = CASE WHEN $evidence IS NULL THEN old_evidence ELSE $evidence END,
+                    rel.notes = CASE WHEN $notes IS NULL THEN old_notes ELSE $notes END,
+                    rel.tags = CASE WHEN $tags IS NULL THEN old_tags ELSE $tags END,
+                    rel.verification_state = CASE WHEN $verification_state IS NULL THEN old_verification_state ELSE $verification_state END
+                DELETE oldRel
+                """,
+                org_id=org_id,
+                collection_id=collection_id,
+                source=source,
+                target=target,
+                current_relation=current_relation,
+                target_relation=target_relation,
+                weight=weight,
+                description=description,
+                evidence=evidence,
+                notes=notes,
+                tags=tags,
+                verification_state=verification_state,
+                timestamp=timestamp,
+            )
+
+        event_id = GraphStore._manual_change_event_tx(
+            tx,
+            collection_id,
+            org_id,
+            operation,
+            actor,
+            timestamp,
+            [source, target],
+            {
+                "source": source,
+                "target": target,
+                "relation": current_relation,
+                "new_relation": target_relation,
+                "old_weight": rel_row.get("old_weight"),
+                "new_weight": weight,
+                "old_notes": rel_row.get("old_notes"),
+                "notes": notes,
+                "old_tags": rel_row.get("old_tags"),
+                "tags": tags,
+                "old_verification_state": rel_row.get("old_verification_state"),
+                "verification_state": verification_state,
+                "reason": reason,
+            },
+        )
+        return {
+            "ok": True,
+            "operation": operation,
+            "event_id": event_id,
+            "details": {
+                "source": source,
+                "target": target,
+                "old_relation": current_relation,
+                "new_relation": target_relation,
+            },
+        }
+
+    @staticmethod
+    def _update_concept_curation_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        concept_name: str,
+        notes: Optional[str],
+        tags: Optional[List[str]],
+        verification_state: Optional[str],
+        actor: str,
+        reason: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        concept = normalize_concept(concept_name)
+        if not concept:
+            return {"ok": False, "reason": "invalid_concept_name"}
+
+        concept_row = tx.run(
+            GraphStore._concept_is_used_query(),
+            collection_id=collection_id,
+            org_id=org_id,
+            concept=concept,
+        ).single()
+        if not concept_row:
+            return {"ok": False, "reason": "concept_not_found"}
+
+        tx.run(
+            """
+            MATCH (concept:Concept {org_id: $org_id, name: $concept})
+            SET concept.updated_at = $timestamp,
+                concept.notes = CASE WHEN $notes IS NULL THEN concept.notes ELSE $notes END,
+                concept.tags = CASE WHEN $tags IS NULL THEN concept.tags ELSE $tags END,
+                concept.verification_state = CASE WHEN $verification_state IS NULL THEN concept.verification_state ELSE $verification_state END
+            """,
+            org_id=org_id,
+            concept=concept,
+            notes=notes,
+            tags=tags,
+            verification_state=verification_state,
+            timestamp=timestamp,
+        )
+
+        event_id = GraphStore._manual_change_event_tx(
+            tx,
+            collection_id,
+            org_id,
+            "manual_curate_concept",
+            actor,
+            timestamp,
+            [concept],
+            {
+                "concept": concept,
+                "old_notes": concept_row.get("old_notes"),
+                "notes": notes,
+                "old_tags": concept_row.get("old_tags"),
+                "tags": tags,
+                "old_verification_state": concept_row.get("old_verification_state"),
+                "verification_state": verification_state,
+                "reason": reason,
+            },
+        )
+        return {
+            "ok": True,
+            "operation": "manual_curate_concept",
+            "event_id": event_id,
+            "details": {"concept": concept},
         }
 
     def ingest_chunks(
