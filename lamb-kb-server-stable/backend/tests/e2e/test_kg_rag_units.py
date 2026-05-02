@@ -83,6 +83,241 @@ def _import_simple_query_with_stubs(monkeypatch):
     return module
 
 
+class FakeResult:
+    def __init__(self, rows=None, single_row=None):
+        self.rows = rows or []
+        self.single_row = single_row
+
+    def data(self):
+        return self.rows
+
+    def single(self):
+        return self.single_row
+
+
+class GraphStoreSuccessTx:
+    def __init__(self):
+        self.queries = []
+
+    def run(self, query, **params):
+        self.queries.append({"query": query, "params": params})
+        compact_query = " ".join(query.split())
+        if "RETURN event.event_id AS revert_event_id" in compact_query:
+            return FakeResult(single_row={"revert_event_id": "revert-1"})
+        if "RETURN event.event_id AS event_id" in compact_query:
+            return FakeResult(single_row={"event_id": "event-1"})
+        if "RETURN collect(chunk.chunk_id) AS chunk_ids" in compact_query:
+            return FakeResult(single_row={"chunk_ids": ["chunk-1", "chunk-2"]})
+        if "RETURN event.operation AS operation" in compact_query:
+            return FakeResult(
+                single_row={
+                    "operation": "automatic_ingestion",
+                    "filename": "kg.md",
+                    "concepts": ["knowledge graph"],
+                    "payload_json": '{"relationship_details":[{"source":"knowledge graph","target":"neo4j","relation":"stored_in","confidence":0.5}],"cooccurrence_details":[{"source":"knowledge graph","target":"neo4j"}]}',
+                    "document_id": "doc-1",
+                }
+            )
+        if "RETURN rel.weight AS old_weight" in compact_query:
+            return FakeResult(
+                single_row={
+                    "old_weight": 1.0,
+                    "old_description": "old",
+                    "old_evidence": "old evidence",
+                    "old_notes": "old notes",
+                    "old_tags": ["old"],
+                    "old_verification_state": "unverified",
+                }
+            )
+        if "RETURN concept.name AS name" in compact_query:
+            return FakeResult(
+                single_row={
+                    "name": params.get("concept", "knowledge graph"),
+                    "old_notes": "old notes",
+                    "old_tags": ["old"],
+                    "old_verification_state": "unverified",
+                }
+            )
+        if "RETURN count(" in compact_query or "RETURN count(rel) AS count" in compact_query:
+            return FakeResult(single_row={"count": 1})
+        return FakeResult()
+
+
+class GraphStoreCoverageSession:
+    def __init__(self):
+        self.queries = []
+        self.tx = GraphStoreSuccessTx()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def execute_write(self, callback, *args):
+        return callback(self.tx, *args)
+
+    def run(self, query, **params):
+        self.queries.append({"query": query, "params": params})
+        compact_query = " ".join(query.split())
+        if "CREATE CONSTRAINT" in compact_query or "CREATE INDEX" in compact_query:
+            return FakeResult()
+        if "RETURN event.event_id AS event_id" in compact_query and "chunk_ids" not in compact_query:
+            return FakeResult(
+                rows=[
+                    {
+                        "event_id": "event-1",
+                        "collection_id": params.get("collection_id", 1),
+                        "org_id": params.get("org_id", "org-1"),
+                        "operation": "automatic_ingestion",
+                        "actor": "pytest",
+                        "timestamp": "2026-05-02T00:00:00Z",
+                        "filename": "kg.md",
+                        "concepts": ["knowledge graph"],
+                        "payload_json": "{}",
+                        "document_id": "doc-1",
+                        "file_id": 2,
+                    }
+                ]
+            )
+        if "RETURN event.event_id AS event_id" in compact_query and "chunk_ids" in compact_query:
+            return FakeResult(
+                single_row={
+                    "event_id": "event-1",
+                    "collection_id": params.get("collection_id", 1),
+                    "org_id": params.get("org_id", "org-1"),
+                    "operation": "automatic_ingestion",
+                    "actor": "pytest",
+                    "timestamp": "2026-05-02T00:00:00Z",
+                    "filename": "kg.md",
+                    "concepts": ["knowledge graph"],
+                    "payload_json": "{}",
+                    "document_id": "doc-1",
+                    "file_id": 2,
+                    "chunk_ids": ["chunk-1"],
+                }
+            )
+        if "RETURN concept.name AS name," in compact_query and "chunk_count" in compact_query:
+            return FakeResult(
+                rows=[
+                    {
+                        "name": "knowledge graph",
+                        "display_name": "Knowledge Graph",
+                        "entity_type": "concept",
+                        "description": "Graph concepts",
+                        "notes": "curated",
+                        "tags": ["kg"],
+                        "verification_state": "verified",
+                        "chunk_count": 2,
+                    },
+                    {
+                        "name": "neo4j",
+                        "display_name": "Neo4j",
+                        "entity_type": "technology",
+                        "description": "Graph database",
+                        "notes": "",
+                        "tags": [],
+                        "verification_state": None,
+                        "chunk_count": 1,
+                    },
+                ]
+            )
+        if "RETURN source.name AS source" in compact_query:
+            return FakeResult(
+                rows=[
+                    {
+                        "source": "knowledge graph",
+                        "target": "neo4j",
+                        "type": "RELATES_TO",
+                        "relation": "stored_in",
+                        "weight": 2.0,
+                        "description": "stored in",
+                        "evidence": "evidence",
+                        "notes": "",
+                        "tags": ["manual"],
+                        "verification_state": "verified",
+                    }
+                ]
+            )
+        if "RETURN chunk.chunk_id AS chunk_id" in compact_query and "text_preview" in compact_query:
+            return FakeResult(
+                rows=[
+                    {
+                        "chunk_id": "chunk-1",
+                        "source_label": "Section 1",
+                        "filename": "kg.md",
+                        "document_id": "doc-1",
+                        "text_preview": "Knowledge graph text",
+                        "concepts": ["knowledge graph", "neo4j"],
+                    }
+                ]
+            )
+        if "RETURN concept.name AS name, count(*) AS mentions" in compact_query:
+            return FakeResult(rows=[{"name": "knowledge graph", "mentions": 1}])
+        if "RETURN entry.name AS entry" in compact_query:
+            return FakeResult(
+                rows=[
+                    {
+                        "entry": "knowledge graph",
+                        "related": "neo4j",
+                        "edges": [
+                            {
+                                "source": "knowledge graph",
+                                "target": "neo4j",
+                                "type": "stored_in",
+                                "weight": 1,
+                            }
+                        ],
+                        "chunk_ids": ["chunk-2"],
+                        "hops": 1,
+                        "score": 2.0,
+                    }
+                ]
+            )
+        if "RETURN chunk.chunk_id AS chunk_id" in compact_query and "mentions" in compact_query:
+            return FakeResult(rows=[{"chunk_id": "chunk-1", "mentions": 1, "source_label": "Section"}])
+        if "RETURN event.operation AS operation" in compact_query:
+            return FakeResult(
+                rows=[
+                    {
+                        "operation": "automatic_ingestion",
+                        "actor": "pytest",
+                        "timestamp": "2026-05-02T00:00:00Z",
+                        "filename": "kg.md",
+                        "concepts": ["knowledge graph"],
+                        "payload_json": "{}",
+                    }
+                ]
+            )
+        return FakeResult()
+
+
+class GraphStoreCoverageDriver:
+    def __init__(self):
+        self.session_instance = GraphStoreCoverageSession()
+        self.closed = False
+        self.verify_calls = 0
+
+    def session(self):
+        return self.session_instance
+
+    def verify_connectivity(self):
+        self.verify_calls += 1
+
+    def close(self):
+        self.closed = True
+
+
+def _configured_graph_store(monkeypatch):
+    graph_store = GraphStore(kg_config={"enabled": False})
+    graph_store.driver = GraphStoreCoverageDriver()
+    graph_store.enabled = True
+    graph_store.uri = "bolt://example"
+    graph_store.password = "secret"
+    monkeypatch.setattr("services.graph_store.GraphDatabase", object())
+    return graph_store
+
+
 def test_normalize_concept_folds_accents_and_spacing():
     assert normalize_concept("  Traçabilitat   del Graf! ") == "tracabilitat del graf"
 
@@ -178,6 +413,225 @@ def test_kg_rag_query_disabled_returns_baseline_with_trace(monkeypatch):
     assert results[0]["similarity"] == 0.9
     assert results[0]["metadata"]["kg_rag"]["enabled"] is False
     assert "KG-RAG is disabled" in results[0]["metadata"]["kg_rag"]["warnings"][0]
+
+
+def test_kg_rag_query_plugin_parameters_are_exposed():
+    params = KGRAGQueryPlugin().get_parameters()
+
+    assert params["top_k"]["default"] == 5
+    assert params["graph_depth"]["default"] == 2
+    assert params["include_trace"]["type"] == "boolean"
+
+
+def test_kg_rag_query_requires_db_and_chroma_collection():
+    plugin = KGRAGQueryPlugin()
+
+    with pytest.raises(ValueError, match="Database session is required"):
+        plugin.query(collection_id=1, query_text="x", chroma_collection=object())
+
+    with pytest.raises(ValueError, match="ChromaDB collection is required"):
+        plugin.query(collection_id=1, query_text="x", db=object())
+
+
+def test_kg_rag_query_enabled_without_seed_chunks_returns_traced_empty_baseline(monkeypatch):
+    class FakeChromaCollection:
+        def query(self, query_texts, n_results):
+            return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+
+    monkeypatch.setattr(
+        "plugins.kg_rag_query.config_module.get_kg_rag_config",
+        lambda: {"enabled": True, "graph_depth": 2, "limit_factor": 4},
+    )
+
+    results = KGRAGQueryPlugin().query(
+        collection_id=1,
+        query_text="no seeds",
+        db=object(),
+        chroma_collection=FakeChromaCollection(),
+    )
+
+    assert results == []
+
+
+def test_kg_rag_query_missing_collection_raises(monkeypatch):
+    class FakeChromaCollection:
+        def query(self, query_texts, n_results):
+            return {
+                "documents": [["Seed"]],
+                "metadatas": [[{"document_id": "seed-1"}]],
+                "distances": [[0.1]],
+            }
+
+    service_module = types.ModuleType("database.service")
+
+    class FakeCollectionService:
+        @staticmethod
+        def get_collection(db, collection_id):
+            return None
+
+    service_module.CollectionService = FakeCollectionService
+    monkeypatch.setitem(sys.modules, "database.service", service_module)
+    monkeypatch.setattr(
+        "plugins.kg_rag_query.config_module.get_kg_rag_config",
+        lambda: {"enabled": True, "graph_depth": 2, "limit_factor": 4},
+    )
+
+    with pytest.raises(ValueError, match="Collection with ID 404 not found"):
+        KGRAGQueryPlugin().query(
+            collection_id=404,
+            query_text="seed",
+            db=object(),
+            chroma_collection=FakeChromaCollection(),
+        )
+
+
+def test_kg_rag_query_unconfigured_graph_returns_baseline_without_trace(monkeypatch):
+    class FakeChromaCollection:
+        def query(self, query_texts, n_results):
+            return {
+                "documents": [["Seed"]],
+                "metadatas": [[{"document_id": "seed-1"}]],
+                "distances": [[0.1]],
+            }
+
+    class FakeGraphStore:
+        def is_configured(self):
+            return False
+
+    service_module = types.ModuleType("database.service")
+
+    class FakeCollection:
+        owner = "org-attr"
+
+    class FakeCollectionService:
+        @staticmethod
+        def get_collection(db, collection_id):
+            return FakeCollection()
+
+    service_module.CollectionService = FakeCollectionService
+    monkeypatch.setitem(sys.modules, "database.service", service_module)
+    monkeypatch.setattr(
+        "plugins.kg_rag_query.config_module.get_kg_rag_config",
+        lambda: {"enabled": True, "graph_depth": 2, "limit_factor": 4},
+    )
+    monkeypatch.setattr("plugins.kg_rag_query.get_graph_store", lambda: FakeGraphStore())
+
+    results = KGRAGQueryPlugin().query(
+        collection_id=1,
+        query_text="seed",
+        db=object(),
+        chroma_collection=FakeChromaCollection(),
+        include_trace=False,
+    )
+
+    assert results == [
+        {"similarity": pytest.approx(0.9), "data": "Seed", "metadata": {"document_id": "seed-1"}}
+    ]
+
+
+def test_kg_rag_query_graph_expands_no_additional_chunks_warns(monkeypatch):
+    class FakeChromaCollection:
+        def query(self, query_texts, n_results):
+            return {
+                "documents": [["Seed"]],
+                "metadatas": [[{"document_id": "seed-1"}]],
+                "distances": [[0.1]],
+            }
+
+    class FakeGraphStore:
+        def is_configured(self):
+            return True
+
+        def expand_from_chunks(self, **kwargs):
+            return {
+                "entry_concepts": ["seed"],
+                "traversed_edges": [],
+                "expanded_chunk_ids": [],
+                "latest_changes": [],
+                "graph_latency_ms": 1.0,
+            }
+
+    service_module = types.ModuleType("database.service")
+
+    class FakeCollectionService:
+        @staticmethod
+        def get_collection(db, collection_id):
+            return {"id": collection_id, "owner": "org-1"}
+
+    service_module.CollectionService = FakeCollectionService
+    monkeypatch.setitem(sys.modules, "database.service", service_module)
+    monkeypatch.setattr(
+        "plugins.kg_rag_query.config_module.get_kg_rag_config",
+        lambda: {"enabled": True, "graph_depth": 2, "limit_factor": 4},
+    )
+    monkeypatch.setattr("plugins.kg_rag_query.get_graph_store", lambda: FakeGraphStore())
+
+    results = KGRAGQueryPlugin().query(
+        collection_id=1,
+        query_text="seed",
+        db=object(),
+        chroma_collection=FakeChromaCollection(),
+    )
+
+    assert results[0]["metadata"]["kg_rag"]["warnings"] == [
+        "Graph returned no additional chunks"
+    ]
+
+
+def test_kg_rag_query_private_helpers_cover_edge_cases():
+    plugin = KGRAGQueryPlugin()
+
+    assert plugin._as_bool(True) is True
+    assert plugin._as_bool(False) is False
+    assert plugin._as_bool(None) is False
+    assert plugin._as_bool("enabled") is True
+    assert plugin._as_bool("off") is False
+    assert plugin._result_chunk_id({"metadata": {"child_chunk_id": "child-1"}}) == "child-1"
+    assert plugin._result_chunk_id({"metadata": {"chunk_id": "chunk-1"}}) == "chunk-1"
+
+    class MismatchedChromaCollection:
+        def query(self, query_texts, n_results):
+            return {
+                "documents": [["doc-1", "doc-2"]],
+                "metadatas": [[{"document_id": "doc-1"}]],
+                "distances": [[0.1]],
+            }
+
+    assert plugin._query_vector_baseline(
+        MismatchedChromaCollection(), "query", top_k=2, threshold=0.0
+    ) == [
+        {"similarity": pytest.approx(0.9), "data": "doc-1", "metadata": {"document_id": "doc-1"}}
+    ]
+
+    class RaisingChromaCollection:
+        def get(self, ids, include):
+            raise RuntimeError("boom")
+
+    assert plugin._fetch_expanded_results(RaisingChromaCollection(), ["x"], True) == []
+
+    class SparseChromaCollection:
+        def get(self, ids, include):
+            return {"ids": [], "documents": [], "metadatas": []}
+
+    sparse_results = plugin._fetch_expanded_results(
+        SparseChromaCollection(), ["expanded-1"], return_parent_context=False
+    )
+    assert sparse_results == [
+        {
+            "similarity": 0.72,
+            "data": "",
+            "metadata": {"document_id": "expanded-1", "kg_rag_origin": "graph_expansion"},
+        }
+    ]
+
+    merged = plugin._merge_results(
+        [{"similarity": 0.1, "data": "fallback key", "metadata": {}}], top_k=0
+    )
+    assert merged[0]["data"] == "fallback key"
+    assert plugin._attach_trace([{"metadata": {}}], {"mode": "kg_rag"}, False) == [
+        {"metadata": {}}
+    ]
+    assert KGRAGQueryPlugin().name == "kg_rag_query"
 
 
 def test_kg_rag_merge_prefers_highest_similarity():
@@ -403,6 +857,497 @@ def test_graph_store_ingest_chunks_uses_mocked_driver_session(monkeypatch):
     assert call["args"][1] == 11
     assert call["args"][2] == "kg.md"
     assert call["args"][3] == chunks
+
+
+def test_graph_store_lifecycle_schema_delete_and_singleton(monkeypatch):
+    import services.graph_store as graph_store_module
+
+    assert "T" in graph_store_module.utc_now()
+
+    class DriverFactory:
+        created_driver = GraphStoreCoverageDriver()
+
+        @staticmethod
+        def driver(uri, auth):
+            assert uri == "bolt://kg"
+            assert auth == ("neo4j", "pw")
+            return DriverFactory.created_driver
+
+    monkeypatch.setattr(graph_store_module, "GraphDatabase", DriverFactory)
+    graph_store = GraphStore(
+        kg_config={
+            "enabled": True,
+            "neo4j_uri": "bolt://kg",
+            "neo4j_user": "neo4j",
+            "neo4j_password": "pw",
+        }
+    )
+
+    assert graph_store.is_configured() is True
+    assert graph_store.is_available() is True
+    assert graph_store.ensure_schema() is True
+    assert graph_store.ensure_schema() is True
+    graph_store.delete_collection(5)
+    graph_store.close()
+    assert DriverFactory.created_driver.closed is True
+
+    graph_store_module._GRAPH_STORE = None
+    monkeypatch.setattr(
+        graph_store_module.config_module,
+        "get_kg_rag_config",
+        lambda: {"enabled": False},
+    )
+    assert graph_store_module.get_graph_store() is graph_store_module.get_graph_store()
+    graph_store_module._GRAPH_STORE = None
+
+
+def test_graph_store_lifecycle_failure_paths(monkeypatch):
+    import services.graph_store as graph_store_module
+
+    class RaisingGraphDatabase:
+        @staticmethod
+        def driver(uri, auth):
+            raise RuntimeError("cannot connect")
+
+    monkeypatch.setattr(graph_store_module, "GraphDatabase", RaisingGraphDatabase)
+    graph_store = GraphStore(
+        kg_config={
+            "enabled": True,
+            "neo4j_uri": "bolt://kg",
+            "neo4j_user": "neo4j",
+            "neo4j_password": "pw",
+        }
+    )
+    assert graph_store.driver is None
+    assert graph_store.is_available() is False
+    assert graph_store.ensure_schema() is False
+
+    class UnavailableDriver(GraphStoreCoverageDriver):
+        def verify_connectivity(self):
+            raise RuntimeError("down")
+
+    graph_store.driver = UnavailableDriver()
+    assert graph_store.is_available() is False
+
+    class BadSessionDriver(GraphStoreCoverageDriver):
+        def session(self):
+            raise RuntimeError("schema failed")
+
+    graph_store.driver = BadSessionDriver()
+    assert graph_store.ensure_schema() is False
+
+
+def test_graph_store_read_methods_and_collection_graph(monkeypatch):
+    graph_store = _configured_graph_store(monkeypatch)
+    graph_store._schema_ready = True
+
+    changes = graph_store.list_changes(
+        5,
+        "org-1",
+        concept="knowledge graph",
+        document_id="doc-1",
+        filename="kg.md",
+        operation="automatic_ingestion",
+        limit=500,
+    )
+    assert changes[0]["event_id"] == "event-1"
+
+    change = graph_store.get_change(5, "org-1", "event-1")
+    assert change["chunk_ids"] == ["chunk-1"]
+
+    graph = graph_store.get_collection_graph(
+        5,
+        "org-1",
+        concept="Knowledge",
+        document_id="doc-1",
+        include_chunks=True,
+        limit=500,
+    )
+    assert graph["counts"] == {"concepts": 2, "chunks": 1, "edges": 3}
+    assert {node["type"] for node in graph["nodes"]} == {"concept", "chunk"}
+
+    graph_without_chunks = graph_store.get_collection_graph(
+        5,
+        "org-1",
+        include_chunks=False,
+        limit=0,
+    )
+    assert graph_without_chunks["counts"]["chunks"] == 0
+
+    monkeypatch.setattr(graph_store, "ensure_schema", lambda: False)
+    assert graph_store.list_changes(5, "org-1") == []
+    assert graph_store.get_change(5, "org-1", "missing") is None
+    assert graph_store.delete_collection(5) is None
+    empty_graph = graph_store.get_collection_graph(5, "org-1")
+    assert empty_graph["counts"] == {"concepts": 0, "chunks": 0, "edges": 0}
+
+
+def test_graph_store_collection_graph_no_concepts(monkeypatch):
+    class EmptyConceptSession(GraphStoreCoverageSession):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN concept.name AS name," in compact_query and "chunk_count" in compact_query:
+                return FakeResult(rows=[])
+            return super().run(query, **params)
+
+    graph_store = _configured_graph_store(monkeypatch)
+    graph_store._schema_ready = True
+    graph_store.driver.session_instance = EmptyConceptSession()
+
+    graph = graph_store.get_collection_graph(5, "org-1", concept="missing")
+    assert graph["nodes"] == []
+    assert graph["counts"]["concepts"] == 0
+
+
+def test_graph_store_collection_graph_skips_chunk_rows_without_ids(monkeypatch):
+    class MissingChunkIdSession(GraphStoreCoverageSession):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN chunk.chunk_id AS chunk_id" in compact_query and "text_preview" in compact_query:
+                return FakeResult(rows=[{"chunk_id": "", "concepts": ["knowledge graph"]}])
+            return super().run(query, **params)
+
+    graph_store = _configured_graph_store(monkeypatch)
+    graph_store._schema_ready = True
+    graph_store.driver.session_instance = MissingChunkIdSession()
+
+    graph = graph_store.get_collection_graph(5, "org-1", include_chunks=True)
+    assert graph["counts"]["chunks"] == 1
+    assert all(node["type"] == "concept" for node in graph["nodes"])
+
+
+def test_graph_store_curation_wrappers_and_transactions(monkeypatch):
+    graph_store = _configured_graph_store(monkeypatch)
+    graph_store._schema_ready = True
+
+    rename = graph_store.rename_concept(5, "org-1", "Knowledge Graph", "Graph RAG")
+    assert rename["ok"] is True
+    assert rename["operation"] == "manual_rename_concept"
+
+    merge = graph_store.merge_concepts(5, "org-1", ["Graph RAG"], "Knowledge Graph")
+    assert merge["ok"] is True
+    assert merge["details"]["moved"]
+
+    same_relation_edit = graph_store.edit_relationship(
+        5,
+        "org-1",
+        source_name="Knowledge Graph",
+        target_name="Neo4j",
+        relation="stored in",
+        weight=2.0,
+        notes="reviewed",
+        tags=["manual"],
+        verification_state="verified",
+    )
+    assert same_relation_edit["ok"] is True
+
+    changed_relation_edit = graph_store.edit_relationship(
+        5,
+        "org-1",
+        source_name="Knowledge Graph",
+        target_name="Neo4j",
+        relation="stored in",
+        new_relation="queries",
+        description="new relation",
+        evidence="manual evidence",
+    )
+    assert changed_relation_edit["details"]["new_relation"] == "queries"
+
+    curation = graph_store.update_concept_curation(
+        5,
+        "org-1",
+        "Knowledge Graph",
+        notes="verified",
+        tags=["kg"],
+        verification_state="verified",
+    )
+    assert curation["ok"] is True
+
+    tx = GraphStoreSuccessTx()
+    assert GraphStore._rename_concept_tx(tx, 5, "org-1", "", "x", "actor", "", "now") == {
+        "ok": False,
+        "reason": "invalid_concept_name",
+    }
+    assert GraphStore._rename_concept_tx(
+        tx, 5, "org-1", "Same", "same", "actor", "", "now"
+    ) == {"ok": False, "reason": "concept_names_are_equal"}
+    assert GraphStore._merge_concepts_tx(
+        tx, 5, "org-1", [], "target", "actor", "", "now"
+    ) == {"ok": False, "reason": "invalid_merge_request"}
+    assert GraphStore._edit_relationship_tx(
+        tx,
+        5,
+        "org-1",
+        "",
+        "target",
+        "related_to",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "actor",
+        "",
+        "manual_edit_relationship",
+        "now",
+    ) == {"ok": False, "reason": "invalid_relationship_identity"}
+    assert GraphStore._update_concept_curation_tx(
+        tx, 5, "org-1", "", None, None, None, "actor", "", "now"
+    ) == {"ok": False, "reason": "invalid_concept_name"}
+
+    monkeypatch.setattr(graph_store, "ensure_schema", lambda: False)
+    assert graph_store.revert_change(5, "org-1", "event")["reason"] == "neo4j_not_available"
+    assert graph_store.rename_concept(5, "org-1", "a", "b")["reason"] == "neo4j_not_available"
+    assert graph_store.merge_concepts(5, "org-1", ["a"], "b")["reason"] == "neo4j_not_available"
+    assert graph_store.edit_relationship(
+        5, "org-1", source_name="a", target_name="b", relation="r"
+    )["reason"] == "neo4j_not_available"
+    assert graph_store.update_concept_curation(5, "org-1", "a")["reason"] == "neo4j_not_available"
+
+
+def test_graph_store_transaction_negative_paths():
+    class NoRowsTx(GraphStoreSuccessTx):
+        def run(self, query, **params):
+            return FakeResult()
+
+    no_rows_tx = NoRowsTx()
+    assert GraphStore._revert_change_tx(
+        no_rows_tx, 5, "org-1", "missing", "actor", "", "now"
+    ) == {"reverted": False, "reason": "change_not_found", "event_id": "missing"}
+    assert GraphStore._move_concept_in_collection_tx(
+        no_rows_tx, 5, "org-1", "missing", "target", "Target", "now"
+    ) == {"moved": False, "reason": "source_concept_not_found"}
+    assert GraphStore._merge_concepts_tx(
+        no_rows_tx, 5, "org-1", ["source"], "target", "actor", "", "now"
+    ) == {"ok": False, "reason": "source_concepts_not_found", "missing": ["source"]}
+    assert GraphStore._edit_relationship_tx(
+        no_rows_tx,
+        5,
+        "org-1",
+        "source",
+        "target",
+        "related_to",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "actor",
+        "",
+        "manual_edit_relationship",
+        "now",
+    ) == {"ok": False, "reason": "relationship_not_found"}
+    assert GraphStore._update_concept_curation_tx(
+        no_rows_tx, 5, "org-1", "missing", None, None, None, "actor", "", "now"
+    ) == {"ok": False, "reason": "concept_not_found"}
+
+    class UnsupportedEventTx(GraphStoreSuccessTx):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN event.operation AS operation" in compact_query:
+                return FakeResult(single_row={"operation": "manual_edit_relationship"})
+            return super().run(query, **params)
+
+    assert GraphStore._revert_change_tx(
+        UnsupportedEventTx(), 5, "org-1", "event-1", "actor", "", "now"
+    ) == {
+        "reverted": False,
+        "reason": "unsupported_operation",
+        "event_id": "event-1",
+        "operation": "manual_edit_relationship",
+    }
+
+    class NoDocumentEventTx(GraphStoreSuccessTx):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN event.operation AS operation" in compact_query:
+                return FakeResult(
+                    single_row={
+                        "operation": "automatic_ingestion",
+                        "payload_json": "{}",
+                    }
+                )
+            return super().run(query, **params)
+
+    assert GraphStore._revert_change_tx(
+        NoDocumentEventTx(), 5, "org-1", "event-1", "actor", "", "now"
+    ) == {"reverted": False, "reason": "change_has_no_document", "event_id": "event-1"}
+
+
+def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
+    graph_store = _configured_graph_store(monkeypatch)
+    graph_store._schema_ready = True
+
+    revert = graph_store.revert_change(5, "org-1", "event-1", reason="rollback")
+    assert revert["reverted"] is True
+    assert revert["chunk_ids"] == ["chunk-1", "chunk-2"]
+
+    class FallbackPayloadTx(GraphStoreSuccessTx):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN event.operation AS operation" in compact_query:
+                return FakeResult(
+                    single_row={
+                        "operation": "automatic_ingestion",
+                        "filename": "kg.md",
+                        "concepts": ["knowledge graph"],
+                        "payload_json": '{"relationships":[null,{"source":"knowledge graph","target":"neo4j","relation":"stored_in"}],"cooccurrences":[null,{"source":"knowledge graph","target":"neo4j"}]}',
+                        "document_id": "doc-1",
+                    }
+                )
+            return super().run(query, **params)
+
+    assert GraphStore._revert_change_tx(
+        FallbackPayloadTx(), 5, "org-1", "event-1", "actor", "", "now"
+    )["reverted"] is True
+
+    class BadPayloadTx(FallbackPayloadTx):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN event.operation AS operation" in compact_query:
+                return FakeResult(
+                    single_row={
+                        "operation": "automatic_ingestion",
+                        "payload_json": "not json",
+                        "document_id": "doc-1",
+                    }
+                )
+            return super().run(query, **params)
+
+    assert GraphStore._revert_change_tx(
+        BadPayloadTx(), 5, "org-1", "event-1", "actor", "", "now"
+    )["reverted"] is True
+
+    chunks = [
+        TextChunk(
+            chunk_id="chunk-1",
+            text="Knowledge graph text",
+            parent_text="Parent text",
+            metadata={"filename": "kg.md", "parent_chunk_id": "parent-1", "section_title": "Intro"},
+        )
+    ]
+    tx = GraphStoreSuccessTx()
+    GraphStore._ingest_tx(
+        tx,
+        {"id": 5, "owner": "org-1", "name": "KG", "description": "desc"},
+        10,
+        "kg.md",
+        chunks,
+        {"chunk-1": ["knowledge graph", "neo4j"]},
+        [
+            {
+                "name": "knowledge graph",
+                "display_name": "Knowledge Graph",
+                "entity_type": "concept",
+                "description": "desc",
+                "confidence": 0.8,
+            }
+        ],
+        [
+            {
+                "source": "knowledge graph",
+                "target": "neo4j",
+                "relation": "stored_in",
+                "description": "stored",
+                "evidence": "evidence",
+                "chunk_id": "chunk-1",
+                "confidence": 0.5,
+            }
+        ],
+        [("knowledge graph", "neo4j")],
+        "actor",
+    )
+    assert len(tx.queries) >= 6
+
+    writes = graph_store.ingest_chunks(
+        collection={"id": 5, "owner": "org-1", "name": "KG"},
+        file_id=None,
+        filename="kg.md",
+        chunks=chunks,
+        concepts_by_chunk={"chunk-1": ["neo4j"]},
+        entities={},
+        relationships=[
+            ExtractedRelationship(
+                source="knowledge graph", target="neo4j", relation="related_to"
+            )
+        ],
+    )
+    assert writes == 5
+    assert graph_store.ingest_chunks(
+        collection={"id": 5},
+        file_id=1,
+        filename="empty.md",
+        chunks=[],
+        concepts_by_chunk={},
+        entities={},
+        relationships=[],
+    ) == 0
+
+    expansion = graph_store.expand_from_chunks(5, "org-1", ["chunk-1"], depth=99, limit=0)
+    assert expansion["entry_concepts"] == ["knowledge graph"]
+    assert expansion["expanded_chunk_ids"] == ["chunk-1", "chunk-2"]
+    assert expansion["traversed_edges"] == [
+        {"source": "knowledge graph", "target": "neo4j", "type": "stored_in", "weight": 1}
+    ]
+    assert graph_store.expand_from_chunks(5, "org-1", [], depth=2, limit=10)[
+        "expanded_chunk_ids"
+    ] == []
+
+    class NoEntryConceptSession(GraphStoreCoverageSession):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN concept.name AS name, count(*) AS mentions" in compact_query:
+                return FakeResult(rows=[])
+            return super().run(query, **params)
+
+    graph_store.driver.session_instance = NoEntryConceptSession()
+    assert graph_store.expand_from_chunks(5, "org-1", ["chunk-1"], depth=2, limit=10)[
+        "entry_concepts"
+    ] == []
+
+    monkeypatch.setattr(graph_store, "ensure_schema", lambda: False)
+    skipped = graph_store.expand_from_chunks(5, "org-1", ["chunk-1"], depth=2, limit=10)
+    assert skipped["latest_changes"] == [
+        {"warning": "Neo4j is not configured or available; KG expansion skipped"}
+    ]
+    assert graph_store.ingest_chunks(
+        collection={"id": 5},
+        file_id=1,
+        filename="kg.md",
+        chunks=chunks,
+        concepts_by_chunk={},
+        entities={},
+        relationships=[],
+    ) == 0
+
+    pair_chunks = [
+        TextChunk(
+            chunk_id="a",
+            text="",
+            parent_text="",
+            metadata={"source": "s", "parent_chunk_id": "p"},
+        ),
+        TextChunk(
+            chunk_id="b",
+            text="",
+            parent_text="",
+            metadata={"source": "s", "parent_chunk_id": "p"},
+        ),
+    ]
+    assert GraphStore._cooccurrences(pair_chunks, {"a": ["a", "b"], "b": ["b", "c"]}) == {
+        ("a", "b"),
+        ("a", "c"),
+        ("b", "c"),
+    }
+    duplicated_edges = [
+        {"source": "a", "target": "b", "type": "r", "i": index} for index in range(82)
+    ]
+    duplicated_edges.extend({"source": f"a-{index}", "target": "b", "type": "r"} for index in range(90))
+    assert len(GraphStore._dedupe_edges(duplicated_edges)) == 80
 
 
 @pytest.mark.skipif(
