@@ -129,6 +129,284 @@ class GraphStore:
                 DETACH DELETE concept
                 """)
 
+    def list_changes(
+        self,
+        collection_id: int,
+        org_id: str,
+        *,
+        concept: Optional[str] = None,
+        document_id: Optional[str] = None,
+        filename: Optional[str] = None,
+        operation: Optional[str] = None,
+        limit: int = 25,
+    ) -> List[Dict[str, Any]]:
+        if not self.ensure_schema():
+            return []
+        limit = max(1, min(int(limit or 25), 200))
+        with self.driver.session() as session:
+            return session.run(
+                """
+                MATCH (event:ChangeEvent {collection_id: $collection_id, org_id: $org_id})
+                OPTIONAL MATCH (event)-[:RECORDED_CHANGE]->(doc:Document)
+                WHERE ($concept IS NULL OR $concept IN coalesce(event.concepts, []))
+                  AND ($document_id IS NULL OR doc.document_id = $document_id)
+                  AND ($filename IS NULL OR event.filename = $filename OR doc.filename = $filename)
+                  AND ($operation IS NULL OR event.operation = $operation)
+                RETURN event.event_id AS event_id,
+                       event.collection_id AS collection_id,
+                       event.org_id AS org_id,
+                       event.operation AS operation,
+                       event.actor AS actor,
+                       event.timestamp AS timestamp,
+                       event.filename AS filename,
+                       coalesce(event.concepts, []) AS concepts,
+                       event.payload_json AS payload_json,
+                       doc.document_id AS document_id,
+                       doc.file_id AS file_id
+                ORDER BY event.timestamp DESC
+                LIMIT $limit
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                concept=concept,
+                document_id=document_id,
+                filename=filename,
+                operation=operation,
+                limit=limit,
+            ).data()
+
+    def get_change(
+        self, collection_id: int, org_id: str, event_id: str
+    ) -> Optional[Dict[str, Any]]:
+        if not self.ensure_schema():
+            return None
+        with self.driver.session() as session:
+            row = session.run(
+                """
+                MATCH (event:ChangeEvent {
+                    event_id: $event_id,
+                    collection_id: $collection_id,
+                    org_id: $org_id
+                })
+                OPTIONAL MATCH (event)-[:RECORDED_CHANGE]->(doc:Document)
+                OPTIONAL MATCH (doc)-[:CONTAINS]->(chunk:Chunk)
+                RETURN event.event_id AS event_id,
+                       event.collection_id AS collection_id,
+                       event.org_id AS org_id,
+                       event.operation AS operation,
+                       event.actor AS actor,
+                       event.timestamp AS timestamp,
+                       event.filename AS filename,
+                       coalesce(event.concepts, []) AS concepts,
+                       event.payload_json AS payload_json,
+                       doc.document_id AS document_id,
+                       doc.file_id AS file_id,
+                       collect(DISTINCT chunk.chunk_id) AS chunk_ids
+                """,
+                event_id=event_id,
+                collection_id=collection_id,
+                org_id=org_id,
+            ).single()
+        return dict(row) if row else None
+
+    def revert_change(
+        self,
+        collection_id: int,
+        org_id: str,
+        event_id: str,
+        *,
+        actor: str = "graph-traceability-api",
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        if not self.ensure_schema():
+            return {"reverted": False, "reason": "neo4j_not_available"}
+        timestamp = utc_now()
+        with self.driver.session() as session:
+            return session.execute_write(
+                self._revert_change_tx,
+                collection_id,
+                org_id,
+                event_id,
+                actor,
+                reason,
+                timestamp,
+            )
+
+    @staticmethod
+    def _revert_change_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        event_id: str,
+        actor: str,
+        reason: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        event_row = tx.run(
+            """
+            MATCH (event:ChangeEvent {
+                event_id: $event_id,
+                collection_id: $collection_id,
+                org_id: $org_id
+            })
+            OPTIONAL MATCH (event)-[:RECORDED_CHANGE]->(doc:Document)
+            RETURN event.operation AS operation,
+                   event.filename AS filename,
+                   coalesce(event.concepts, []) AS concepts,
+                   event.payload_json AS payload_json,
+                   doc.document_id AS document_id
+            """,
+            event_id=event_id,
+            collection_id=collection_id,
+            org_id=org_id,
+        ).single()
+        if not event_row:
+            return {"reverted": False, "reason": "change_not_found", "event_id": event_id}
+
+        operation = event_row.get("operation")
+        if operation != "automatic_ingestion":
+            return {
+                "reverted": False,
+                "reason": "unsupported_operation",
+                "event_id": event_id,
+                "operation": operation,
+            }
+
+        document_id = event_row.get("document_id")
+        if not document_id:
+            return {"reverted": False, "reason": "change_has_no_document", "event_id": event_id}
+
+        try:
+            payload = json.loads(event_row.get("payload_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+
+        chunk_row = tx.run(
+            """
+            MATCH (doc:Document {document_id: $document_id, collection_id: $collection_id})-[:CONTAINS]->(chunk:Chunk)
+            RETURN collect(chunk.chunk_id) AS chunk_ids
+            """,
+            document_id=document_id,
+            collection_id=collection_id,
+        ).single()
+        chunk_ids = list(chunk_row.get("chunk_ids") or []) if chunk_row else []
+
+        relationship_details = payload.get("relationship_details")
+        if not isinstance(relationship_details, list):
+            relationship_details = payload.get("relationships")
+        if not isinstance(relationship_details, list):
+            relationship_details = []
+
+        for relationship in relationship_details:
+            if not isinstance(relationship, dict):
+                continue
+            tx.run(
+                """
+                MATCH (source:Concept {org_id: $org_id, name: $source})
+                MATCH (target:Concept {org_id: $org_id, name: $target})
+                MATCH (source)-[rel:RELATES_TO {collection_id: $collection_id, relation: $relation}]->(target)
+                SET rel.weight = coalesce(rel.weight, 0) - $confidence
+                WITH rel
+                WHERE coalesce(rel.weight, 0) <= 0
+                DELETE rel
+                """,
+                org_id=org_id,
+                collection_id=collection_id,
+                source=relationship.get("source") or "",
+                target=relationship.get("target") or "",
+                relation=relationship.get("relation") or "related_to",
+                confidence=float(relationship.get("confidence") or 1.0),
+            )
+
+        cooccurrence_details = payload.get("cooccurrence_details")
+        if not isinstance(cooccurrence_details, list):
+            cooccurrence_details = payload.get("cooccurrences")
+        if not isinstance(cooccurrence_details, list):
+            cooccurrence_details = []
+
+        for cooccurrence in cooccurrence_details:
+            if not isinstance(cooccurrence, dict):
+                continue
+            tx.run(
+                """
+                MATCH (source:Concept {org_id: $org_id, name: $source})
+                MATCH (target:Concept {org_id: $org_id, name: $target})
+                MATCH (source)-[rel:CO_OCCURS_WITH {collection_id: $collection_id}]->(target)
+                SET rel.weight = coalesce(rel.weight, 0) - 1
+                WITH rel
+                WHERE coalesce(rel.weight, 0) <= 0
+                DELETE rel
+                """,
+                org_id=org_id,
+                collection_id=collection_id,
+                source=cooccurrence.get("source") or "",
+                target=cooccurrence.get("target") or "",
+            )
+
+        tx.run(
+            """
+            MATCH (doc:Document {document_id: $document_id, collection_id: $collection_id})
+            OPTIONAL MATCH (doc)-[:CONTAINS]->(chunk:Chunk)
+            DETACH DELETE chunk
+            WITH doc
+            DETACH DELETE doc
+            """,
+            document_id=document_id,
+            collection_id=collection_id,
+        )
+        tx.run(
+            """
+            MATCH (concept:Concept {org_id: $org_id})
+            WHERE NOT EXISTS { MATCH (:Chunk)-[:MENTIONS]->(concept) }
+            DETACH DELETE concept
+            """,
+            org_id=org_id,
+        )
+        revert_row = tx.run(
+            """
+            CREATE (event:ChangeEvent {
+              event_id: randomUUID(),
+              collection_id: $collection_id,
+              org_id: $org_id,
+              operation: 'revert_change',
+              actor: $actor,
+              timestamp: $timestamp,
+              filename: $filename,
+              concepts: $concepts,
+              payload_json: $payload_json
+            })
+            WITH event
+            MATCH (original:ChangeEvent {event_id: $event_id, collection_id: $collection_id, org_id: $org_id})
+            MERGE (event)-[:REVERTS]->(original)
+            RETURN event.event_id AS revert_event_id
+            """,
+            collection_id=collection_id,
+            org_id=org_id,
+            event_id=event_id,
+            actor=actor,
+            timestamp=timestamp,
+            filename=event_row.get("filename") or "",
+            concepts=event_row.get("concepts") or [],
+            payload_json=json.dumps(
+                {
+                    "reverted_event_id": event_id,
+                    "reverted_operation": operation,
+                    "document_id": document_id,
+                    "chunk_ids": chunk_ids,
+                    "reason": reason,
+                },
+                ensure_ascii=False,
+            ),
+        ).single()
+        return {
+            "reverted": True,
+            "event_id": event_id,
+            "revert_event_id": revert_row.get("revert_event_id") if revert_row else None,
+            "operation": operation,
+            "document_id": document_id,
+            "chunk_ids": chunk_ids,
+        }
+
     def ingest_chunks(
         self,
         *,
@@ -390,9 +668,15 @@ class GraphStore:
             payload_json=json.dumps(
                 {
                     "chunks": len(chunks),
+                    "chunk_ids": [chunk.chunk_id for chunk in chunks],
                     "concepts": len(entities),
                     "relationships": len(relationships),
+                    "relationship_details": relationships,
                     "cooccurrences": len(cooccurrences),
+                    "cooccurrence_details": [
+                        {"source": source, "target": target}
+                        for source, target in cooccurrences
+                    ],
                 },
                 ensure_ascii=False,
             ),
@@ -534,7 +818,7 @@ class GraphStore:
 
             changes = session.run(
                 """
-                MATCH (event:ChangeEvent {collection_id: $collection_id})
+                MATCH (event:ChangeEvent {collection_id: $collection_id, org_id: $org_id})
                 WHERE any(concept IN coalesce(event.concepts, []) WHERE concept IN $concepts)
                 RETURN event.operation AS operation,
                        event.actor AS actor,
@@ -546,6 +830,7 @@ class GraphStore:
                 LIMIT 10
                 """,
                 collection_id=collection_id,
+                org_id=org_id,
                 concepts=[concept for concept in related_concepts if concept],
             ).data()
 

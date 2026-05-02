@@ -7,6 +7,7 @@ from services.concept_extraction import (
     normalize_relation,
 )
 from plugins.kg_rag_query import KGRAGQueryPlugin
+from services.graph_store import GraphStore
 
 
 def test_normalize_concept_folds_accents_and_spacing():
@@ -120,3 +121,57 @@ def test_kg_rag_merge_prefers_highest_similarity():
 
     assert [item["metadata"]["document_id"] for item in merged] == ["c1", "c2"]
     assert merged[0]["data"] == "newer"
+
+
+def test_revert_change_reports_missing_event():
+    class FakeTx:
+        def run(self, query, **params):
+            class Result:
+                def single(self):
+                    return None
+
+            return Result()
+
+    result = GraphStore._revert_change_tx(
+        FakeTx(),
+        collection_id=1,
+        org_id="owner",
+        event_id="missing",
+        actor="test",
+        reason="test",
+        timestamp="2026-05-02T00:00:00Z",
+    )
+
+    assert result == {
+        "reverted": False,
+        "reason": "change_not_found",
+        "event_id": "missing",
+    }
+
+
+def test_revert_change_rejects_unsupported_operation():
+    class FakeRecord(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+    class FakeTx:
+        def run(self, query, **params):
+            class Result:
+                def single(self):
+                    return FakeRecord(operation="manual_edit", document_id="doc-1")
+
+            return Result()
+
+    result = GraphStore._revert_change_tx(
+        FakeTx(),
+        collection_id=1,
+        org_id="owner",
+        event_id="event-1",
+        actor="test",
+        reason="test",
+        timestamp="2026-05-02T00:00:00Z",
+    )
+
+    assert result["reverted"] is False
+    assert result["reason"] == "unsupported_operation"
+    assert result["operation"] == "manual_edit"
