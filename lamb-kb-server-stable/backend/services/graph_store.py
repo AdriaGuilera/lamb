@@ -261,7 +261,11 @@ class GraphStore:
             org_id=org_id,
         ).single()
         if not event_row:
-            return {"reverted": False, "reason": "change_not_found", "event_id": event_id}
+            return {
+                "reverted": False,
+                "reason": "change_not_found",
+                "event_id": event_id,
+            }
 
         operation = event_row.get("operation")
         if operation != "automatic_ingestion":
@@ -274,7 +278,11 @@ class GraphStore:
 
         document_id = event_row.get("document_id")
         if not document_id:
-            return {"reverted": False, "reason": "change_has_no_document", "event_id": event_id}
+            return {
+                "reverted": False,
+                "reason": "change_has_no_document",
+                "event_id": event_id,
+            }
 
         try:
             payload = json.loads(event_row.get("payload_json") or "{}")
@@ -401,7 +409,9 @@ class GraphStore:
         return {
             "reverted": True,
             "event_id": event_id,
-            "revert_event_id": revert_row.get("revert_event_id") if revert_row else None,
+            "revert_event_id": (
+                revert_row.get("revert_event_id") if revert_row else None
+            ),
             "operation": operation,
             "document_id": document_id,
             "chunk_ids": chunk_ids,

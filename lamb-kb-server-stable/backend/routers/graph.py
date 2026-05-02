@@ -18,14 +18,15 @@ from schemas.graph import (
 )
 from services.graph_store import get_graph_store
 
-
 router = APIRouter(prefix="/graph", tags=["Graph Traceability"])
 
 
 def _get_collection_or_404(db: Session, collection_id: int):
     collection = CollectionService.get_collection(db, collection_id)
     if not collection:
-        raise HTTPException(status_code=404, detail=f"Collection {collection_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Collection {collection_id} not found"
+        )
     return collection
 
 
@@ -85,7 +86,9 @@ async def get_graph_change(
         event_id=event_id,
     )
     if not change:
-        raise HTTPException(status_code=404, detail=f"Graph change {event_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Graph change {event_id} not found"
+        )
     return change
 
 
@@ -182,7 +185,9 @@ async def revert_graph_change(
         reason=request.reason,
     )
     if not result.get("reverted") and result.get("reason") == "change_not_found":
-        raise HTTPException(status_code=404, detail=f"Graph change {event_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Graph change {event_id} not found"
+        )
     if not result.get("reverted"):
         raise HTTPException(status_code=400, detail=result)
     return result
