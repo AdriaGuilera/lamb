@@ -212,4 +212,7 @@ def get_kg_rag_config() -> Dict[str, Any]:
         or os.getenv("NEO4J_PASSWORD", ""),
         "graph_depth": _env_int("KG_RAG_GRAPH_DEPTH", 2, 1, 4),
         "limit_factor": _env_int("KG_RAG_LIMIT_FACTOR", 4, 1, 20),
+        "extraction_max_workers": _env_int(
+            "KG_RAG_EXTRACTION_MAX_WORKERS", 4, 1, 16
+        ),
     }

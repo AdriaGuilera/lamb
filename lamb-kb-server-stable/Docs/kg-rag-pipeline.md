@@ -17,10 +17,12 @@ KG_RAG_NEO4J_USER=neo4j
 KG_RAG_NEO4J_PASSWORD=your-password
 KG_RAG_GRAPH_DEPTH=2
 KG_RAG_LIMIT_FACTOR=4
+KG_RAG_EXTRACTION_MAX_WORKERS=4
 PLUGIN_KG_RAG_QUERY=ADVANCED
 ```
 
 `KG_RAG_OPENAI_API_KEY` falls back to `OPENAI_API_KEY` and then `EMBEDDINGS_APIKEY`. `KG_RAG_EXTRACTION_MODEL` falls back to `OPENAI_EXTRACTION_MODEL`, then `KG_RAG_CHAT_MODEL`, then `OPENAI_CHAT_MODEL`.
+`KG_RAG_EXTRACTION_MAX_WORKERS` controls how many independent parent text units are extracted in parallel during graph indexing. It defaults to 4 and is clamped between 1 and 16 to reduce ingestion latency without requiring OpenAI Batch API.
 
 ## Docker Compose
 

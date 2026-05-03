@@ -69,6 +69,7 @@ services:
       - KG_RAG_NEO4J_PASSWORD=${KG_RAG_NEO4J_PASSWORD:-lamb-kg-rag-password}
       - KG_RAG_GRAPH_DEPTH=${KG_RAG_GRAPH_DEPTH:-2}
       - KG_RAG_LIMIT_FACTOR=${KG_RAG_LIMIT_FACTOR:-4}
+      - KG_RAG_EXTRACTION_MAX_WORKERS=${KG_RAG_EXTRACTION_MAX_WORKERS:-4}
     volumes:
       - ${LAMB_PROJECT_PATH}:${LAMB_PROJECT_PATH}
       - pip-cache:/root/.cache/pip

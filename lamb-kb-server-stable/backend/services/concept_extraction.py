@@ -6,8 +6,9 @@ import json
 import logging
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import config as config_module
 
@@ -119,6 +120,8 @@ class ConceptExtractor:
         self.config = kg_config or config_module.get_kg_rag_config()
         self.chat_model = self.config.get("chat_model") or "gpt-4o-mini"
         self.model = self.config.get("extraction_model") or self.chat_model
+        configured_workers = int(self.config.get("extraction_max_workers") or 1)
+        self.max_workers = max(1, min(16, configured_workers))
         self.client = client
 
         api_key = self.config.get("openai_api_key") or ""
@@ -140,17 +143,22 @@ class ConceptExtractor:
             parent_text = chunk.parent_text or chunk.text
             parent_groups.setdefault(parent_text, []).append(chunk)
 
-        for parent_text, group in parent_groups.items():
-            source_labels = [
-                str(
-                    chunk.metadata.get("source_label")
-                    or chunk.metadata.get("filename")
-                    or chunk.chunk_id
-                )
-                for chunk in group
+        groups = list(parent_groups.items())
+        if self.max_workers > 1 and len(groups) > 1:
+            worker_count = min(self.max_workers, len(groups))
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = [
+                    executor.submit(self._extract_parent_group, parent_text, group)
+                    for parent_text, group in groups
+                ]
+                group_results = [future.result() for future in futures]
+        else:
+            group_results = [
+                self._extract_parent_group(parent_text, group)
+                for parent_text, group in groups
             ]
-            payload = self._extract_parent_text(parent_text, source_labels)
-            parent_extraction = self._parse_payload(payload, group[0].chunk_id)
+
+        for group, parent_extraction in group_results:
 
             for entity_name, entity in parent_extraction.entities.items():
                 extraction.entities.setdefault(entity_name, entity)
@@ -161,6 +169,20 @@ class ConceptExtractor:
                 extraction.concepts_by_chunk[chunk.chunk_id] = concept_names
 
         return extraction
+
+    def _extract_parent_group(
+        self, parent_text: str, group: List[TextChunk]
+    ) -> Tuple[List[TextChunk], GraphExtraction]:
+        source_labels = [
+            str(
+                chunk.metadata.get("source_label")
+                or chunk.metadata.get("filename")
+                or chunk.chunk_id
+            )
+            for chunk in group
+        ]
+        payload = self._extract_parent_text(parent_text, source_labels)
+        return group, self._parse_payload(payload, group[0].chunk_id)
 
     def _extract_parent_text(
         self, text: str, source_labels: List[str]

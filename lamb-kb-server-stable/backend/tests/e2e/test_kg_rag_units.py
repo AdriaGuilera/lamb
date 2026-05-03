@@ -3,6 +3,8 @@
 import importlib
 import os
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -366,6 +368,80 @@ def test_extractor_without_openai_returns_empty_graph_data():
     assert extraction.concepts_by_chunk == {"chunk-1": []}
     assert extraction.entities == {}
     assert extraction.relationships == []
+
+
+def test_extractor_parallelizes_parent_text_extraction():
+    class RecordingExtractor(ConceptExtractor):
+        def __init__(self):
+            super().__init__(
+                kg_config={
+                    "openai_api_key": "test-key",
+                    "chat_model": "gpt-test",
+                    "extraction_model": "gpt-test",
+                    "extraction_max_workers": 3,
+                },
+                client=object(),
+            )
+            self.active_calls = 0
+            self.max_active_calls = 0
+            self.lock = threading.Lock()
+
+        def _extract_parent_text(self, text, source_labels):
+            with self.lock:
+                self.active_calls += 1
+                self.max_active_calls = max(self.max_active_calls, self.active_calls)
+            try:
+                time.sleep(0.05)
+                return {
+                    "entities": [
+                        {
+                            "name": source_labels[0],
+                            "type": "concept",
+                            "description": text,
+                            "confidence": 1.0,
+                        }
+                    ],
+                    "relationships": [],
+                }
+            finally:
+                with self.lock:
+                    self.active_calls -= 1
+
+    extractor = RecordingExtractor()
+    chunks = [
+        TextChunk(
+            chunk_id="chunk-alpha",
+            text="Alpha text",
+            parent_text="Parent alpha",
+            metadata={"source_label": "Alpha Concept"},
+        ),
+        TextChunk(
+            chunk_id="chunk-beta",
+            text="Beta text",
+            parent_text="Parent beta",
+            metadata={"source_label": "Beta Concept"},
+        ),
+        TextChunk(
+            chunk_id="chunk-gamma",
+            text="Gamma text",
+            parent_text="Parent gamma",
+            metadata={"source_label": "Gamma Concept"},
+        ),
+    ]
+
+    extraction = extractor.extract_for_chunks(chunks)
+
+    assert extractor.max_active_calls > 1
+    assert sorted(extraction.entities) == [
+        "alpha concept",
+        "beta concept",
+        "gamma concept",
+    ]
+    assert extraction.concepts_by_chunk == {
+        "chunk-alpha": ["alpha concept"],
+        "chunk-beta": ["beta concept"],
+        "chunk-gamma": ["gamma concept"],
+    }
 
 
 def test_parse_payload_extracts_entities_and_relationships():
