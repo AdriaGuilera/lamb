@@ -507,7 +507,10 @@ class GraphStore:
                         "target": f"chunk:{chunk_id}",
                         "label": "contains",
                         "weight": 1.0,
-                        "data": {"document_id": document_id_value, "chunk_id": chunk_id},
+                        "data": {
+                            "document_id": document_id_value,
+                            "chunk_id": chunk_id,
+                        },
                     }
                 )
 

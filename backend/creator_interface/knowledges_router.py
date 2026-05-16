@@ -1,27 +1,23 @@
-from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Depends, BackgroundTasks, Form
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import httpx
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Depends, Form
+from fastapi.security import HTTPBearer
 import os
-import uuid
-import datetime
 from dotenv import load_dotenv
 from lamb.owi_bridge.owi_users import OwiUserManager
 from lamb.database_manager import LambDatabaseManager
 from typing import Optional, List, Dict, Any, Union
-import json
-import time
 from pydantic import BaseModel, Field
-from lamb.auth_context import AuthContext, get_auth_context, _build_auth_context
+from lamb.auth_context import _build_auth_context
 from lamb.logging_config import get_logger
-from io import BytesIO
 from .knowledgebase_classes import (
-    KnowledgeBaseMetadata, KnowledgeBaseCreate, KnowledgeBaseUpdate,
-    KnowledgeBaseQuery, KnowledgeBaseFile, KnowledgeBaseResponse,
-    KnowledgeBaseListResponse
+    KnowledgeBaseCreate,
+    KnowledgeBaseUpdate,
+    KnowledgeBaseQuery,
+    KnowledgeBaseListResponse,
 )
 from .kb_server_manager import KBServerManager
 
 # --- Pydantic Models for Knowledges Router --- #
+
 
 class KnowledgeBaseServerOfflineResponse(BaseModel):
     # Important: forbid extra keys so this model doesn't accidentally match
@@ -31,6 +27,7 @@ class KnowledgeBaseServerOfflineResponse(BaseModel):
     message: str = "Knowledge Base server offline"
     kb_server_available: bool = False
 
+
 class KnowledgeBaseCreateResponse(BaseModel):
     # Assuming the response from kb_server_manager.create_knowledge_base
     # Adjust fields based on actual implementation
@@ -39,12 +36,13 @@ class KnowledgeBaseCreateResponse(BaseModel):
     status: str = "success"
     message: str = "Knowledge base created successfully"
 
+
 class KnowledgeBaseDetailsResponse(BaseModel):
     # Response from kb_server_manager.get_knowledge_base_details enhanced with LAMB metadata
     id: str
     name: str
     description: Optional[str]
-    files: Optional[List[Dict]] = [] # Or use a more specific File model if defined
+    files: Optional[List[Dict]] = []  # Or use a more specific File model if defined
     owner: Optional[str] = None
     created_at: Optional[int] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -55,11 +53,13 @@ class KnowledgeBaseDetailsResponse(BaseModel):
     shared_by: Optional[str] = None
     graph_enabled: Optional[bool] = None
 
+
 class KnowledgeBaseUpdateResponse(BaseModel):
     # Assuming the response from kb_server_manager.update_knowledge_base
     kb_id: str
     status: str = "success"
     message: str = "Knowledge base updated successfully"
+
 
 class KnowledgeBaseDeleteResponse(BaseModel):
     # Assuming the response from kb_server_manager.delete_knowledge_base
@@ -70,21 +70,24 @@ class KnowledgeBaseDeleteResponse(BaseModel):
     removed_files: Optional[List[Any]] = None
     collection_name: Optional[str] = None
 
+
 # Define the structure for a single query result item
 class QueryResultItem(BaseModel):
     similarity: Optional[float] = None
     data: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = {}
 
+
 class KnowledgeBaseQueryResponse(BaseModel):
     # Assuming the response from kb_server_manager.query_knowledge_base
     # Define based on the actual structure returned by the KB server query
-    results: List[QueryResultItem] # Use the specific item model
+    results: List[QueryResultItem]  # Use the specific item model
     status: str = "success"
     # Add other fields if the manager returns them (like kb_id, query, debug_info)
     kb_id: Optional[str] = None
     query: Optional[str] = None
     debug_info: Optional[Dict[str, Any]] = None
+
 
 class FileUploadItemResponse(BaseModel):
     id: Optional[str] = None
@@ -95,11 +98,13 @@ class FileUploadItemResponse(BaseModel):
     message: Optional[str] = None
     file_id: Optional[str] = None
 
+
 class FileUploadKBResponse(BaseModel):
     uploaded_files: List[FileUploadItemResponse]
     message: Optional[str] = None
     knowledge_base_id: Optional[str] = None
     status: str = "success"
+
 
 class DeleteFileKBResponse(BaseModel):
     # Assuming response from kb_server_manager.delete_file_from_kb
@@ -108,6 +113,7 @@ class DeleteFileKBResponse(BaseModel):
     status: str = "success"
     message: str = "File deleted successfully"
 
+
 class IngestionPluginParam(BaseModel):
     name: str
     type: str
@@ -115,7 +121,9 @@ class IngestionPluginParam(BaseModel):
     default: Optional[Any] = None
     description: Optional[str] = None
 
+
 # --- Updated Pydantic Models for Ingestion Plugins ---
+
 
 # Define the inner structure for a parameter description based on logged data
 class IngestionParameterDetail(BaseModel):
@@ -124,40 +132,55 @@ class IngestionParameterDetail(BaseModel):
     default: Optional[Any] = None
     required: bool = False
     enum: Optional[List[str]] = None  # Allowed values for select/dropdown
-    enum_labels: Optional[Dict[str, str]] = None  # Human-readable labels for enum values
-    visible_when: Optional[Dict[str, List[str]]] = None  # Conditional visibility based on other param values
+    enum_labels: Optional[Dict[str, str]] = (
+        None  # Human-readable labels for enum values
+    )
+    visible_when: Optional[Dict[str, List[str]]] = (
+        None  # Conditional visibility based on other param values
+    )
     help_text: Optional[str] = None  # Additional help/guidance text
     min: Optional[float] = None  # Minimum value for numeric inputs
     max: Optional[float] = None  # Maximum value for numeric inputs
-    ui_hint: Optional[str] = None  # Hint for UI rendering (e.g., "slider", "select", "number")
+    ui_hint: Optional[str] = (
+        None  # Hint for UI rendering (e.g., "slider", "select", "number")
+    )
     applicable_to: Optional[List[str]] = None  # File types this parameter applies to
+
 
 # Update IngestionPlugin to use the correct key 'parameters' and its Dict structure
 class IngestionPlugin(BaseModel):
     name: str
     description: str
     kind: str
-    supported_file_types: Optional[List[str]] = [] # Add field based on logged data
-    parameters: Dict[str, IngestionParameterDetail] = {} # Use correct key and type
+    supported_file_types: Optional[List[str]] = []  # Add field based on logged data
+    parameters: Dict[str, IngestionParameterDetail] = {}  # Use correct key and type
+
 
 class GetIngestionPluginsResponse(BaseModel):
-    plugins: List[IngestionPlugin] # Relies on the updated IngestionPlugin model
+    plugins: List[IngestionPlugin]  # Relies on the updated IngestionPlugin model
+
 
 # --- End Updated Ingestion Plugin Models ---
+
 
 class PluginIngestFileResponse(BaseModel):
     # Assuming response from kb_server_manager.plugin_ingest_file
     status: str
 
+
 class KBShareToggle(BaseModel):
     """Request model for toggling KB sharing"""
+
     is_shared: bool = Field(..., description="New sharing status")
+
 
 class KBShareToggleResponse(BaseModel):
     """Response model for KB sharing toggle"""
+
     kb_id: str
     is_shared: bool
     message: str
+
 
 class BasePluginIngestRequest(BaseModel):
     """Request body for plugin base ingestion (no direct file upload from client).
@@ -166,8 +189,12 @@ class BasePluginIngestRequest(BaseModel):
     We create a synthetic in-memory file so we can re-use the existing file
     ingestion pipeline (KB server currently only exposes ingest-file).
     """
+
     plugin_name: str = Field(..., description="Name of the ingestion plugin to run")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Plugin parameters")
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict, description="Plugin parameters"
+    )
+
 
 class ErrorResponseDetail(BaseModel):
     detail: Union[str, Dict[str, Any]]
@@ -175,15 +202,19 @@ class ErrorResponseDetail(BaseModel):
 
 # --- Ingestion Status API Models --- #
 
+
 class IngestionProgress(BaseModel):
     """Progress information for an ingestion job"""
+
     current: int = 0
     total: int = 0
     percentage: float = 0.0
     message: Optional[str] = ""
 
+
 class IngestionJobResponse(BaseModel):
     """Response model for a single ingestion job"""
+
     id: int
     job_id: int  # Alias for id
     collection_id: int
@@ -205,19 +236,25 @@ class IngestionJobResponse(BaseModel):
     progress: Optional[IngestionProgress] = None
     error_message: Optional[str] = None
     error_details: Optional[Dict[str, Any]] = None
-    processing_stats: Optional[Dict[str, Any]] = None  # Detailed processing statistics (Jan 2026)
+    processing_stats: Optional[Dict[str, Any]] = (
+        None  # Detailed processing statistics (Jan 2026)
+    )
     owner: Optional[str] = None
+
 
 class IngestionJobListResponse(BaseModel):
     """Response model for listing ingestion jobs"""
+
     total: int
     items: List[IngestionJobResponse]
     limit: int = 50
     offset: int = 0
     has_more: bool = False
 
+
 class IngestionStatusSummary(BaseModel):
     """Summary of ingestion job statuses for a collection"""
+
     collection_id: int
     collection_name: Optional[str] = None
     total_jobs: int = 0
@@ -226,9 +263,12 @@ class IngestionStatusSummary(BaseModel):
     recent_failures: List[Dict[str, Any]] = []
     oldest_processing_job: Optional[Dict[str, Any]] = None
 
+
 class RetryJobRequest(BaseModel):
     """Request model for retrying a failed job"""
+
     override_params: Optional[Dict[str, Any]] = None
+
 
 # --- End Ingestion Status API Models --- #
 
@@ -246,13 +286,13 @@ import config
 # Get environment variables
 LAMB_HOST = config.LAMB_WEB_HOST
 # Note: LAMB_BEARER_TOKEN is configured in config.py
-LAMB_KB_SERVER = os.getenv('LAMB_KB_SERVER', None)
-LAMB_KB_SERVER_TOKEN = os.getenv('LAMB_KB_SERVER_TOKEN')
+LAMB_KB_SERVER = os.getenv("LAMB_KB_SERVER", None)
+LAMB_KB_SERVER_TOKEN = os.getenv("LAMB_KB_SERVER_TOKEN")
 if not LAMB_KB_SERVER_TOKEN:
     raise ValueError("LAMB_KB_SERVER_TOKEN environment variable is required")
 
 # Check if KB server is configured
-KB_SERVER_CONFIGURED = LAMB_KB_SERVER is not None and LAMB_KB_SERVER.strip() != ''
+KB_SERVER_CONFIGURED = LAMB_KB_SERVER is not None and LAMB_KB_SERVER.strip() != ""
 
 router = APIRouter()
 security = HTTPBearer()
@@ -267,43 +307,43 @@ async def authenticate_creator_user(request: Request) -> Dict[str, Any]:
     """
     Authenticate a creator user from the request's Authorization header.
     Uses AuthContext internally for centralized auth resolution.
-    
+
     Args:
         request: FastAPI request object
-    
+
     Returns:
         Dict with creator user information
-    
+
     Raises:
         HTTPException: If authentication fails
     """
     auth_header = request.headers.get("Authorization")
     logger.info(f"Auth header present: {auth_header is not None}")
-    
+
     if not auth_header:
-        raise HTTPException(
-            status_code=401,
-            detail="Authorization header required"
-        )
-    
-    token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else auth_header
-    
+        raise HTTPException(status_code=401, detail="Authorization header required")
+
+    token = (
+        auth_header.replace("Bearer ", "")
+        if auth_header.startswith("Bearer ")
+        else auth_header
+    )
+
     try:
         auth_ctx = _build_auth_context(token)
     except Exception as auth_err:
         logger.error(f"Exception during authentication: {str(auth_err)}")
         raise HTTPException(
-            status_code=401,
-            detail=f"Authentication error: {str(auth_err)}"
+            status_code=401, detail=f"Authentication error: {str(auth_err)}"
         )
-        
+
     if not auth_ctx:
         logger.error("Failed to get creator user from token")
         raise HTTPException(
             status_code=401,
-            detail="Invalid authentication or user not found in creator database"
+            detail="Invalid authentication or user not found in creator database",
         )
-    
+
     creator_user = auth_ctx.user
     logger.info(f"Creator user authenticated: {creator_user.get('email')}")
     return creator_user
@@ -312,21 +352,21 @@ async def authenticate_creator_user(request: Request) -> Dict[str, Any]:
 def get_user_organization(creator_user: Dict[str, Any]) -> Dict[str, Any]:
     """
     Get organization for a creator user.
-    
+
     Args:
         creator_user: Dict containing creator user information
-    
+
     Returns:
         Dict with organization information
     """
     db_manager = LambDatabaseManager()
-    
+
     # Get user's organization
-    if creator_user.get('organization_id'):
-        org = db_manager.get_organization_by_id(creator_user['organization_id'])
+    if creator_user.get("organization_id"):
+        org = db_manager.get_organization_by_id(creator_user["organization_id"])
         if org:
             return org
-    
+
     # Fallback to system organization
     return db_manager.get_organization_by_slug("lamb")
 
@@ -375,10 +415,18 @@ Example Response (KB Server Offline):
     """,
     dependencies=[Depends(security)],
     responses={
-        200: {"description": "Knowledge bases retrieved successfully or KB server status"},
+        200: {
+            "description": "Knowledge bases retrieved successfully or KB server status"
+        },
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "x-codeSamples": [
@@ -388,10 +436,10 @@ Example Response (KB Server Offline):
 curl -X GET 'http://localhost:8000/creator/knowledgebases/user' \\
 -H 'Authorization: Bearer <user_token>'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
         ]
-    }
+    },
 )
 async def get_user_knowledge_bases(request: Request):
     """
@@ -402,7 +450,7 @@ async def get_user_knowledge_bases(request: Request):
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
@@ -410,12 +458,12 @@ async def get_user_knowledge_bases(request: Request):
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
-        
+
         # Get owned knowledge bases from the KB server
         knowledge_bases = await kb_server_manager.get_user_knowledge_bases(creator_user)
-        
+
         # Return knowledge bases to the client
         logger.info(f"Returning {len(knowledge_bases)} owned knowledge bases to client")
         return {"knowledge_bases": knowledge_bases}
@@ -472,10 +520,18 @@ Example Response (KB Server Offline):
     """,
     dependencies=[Depends(security)],
     responses={
-        200: {"description": "Shared knowledge bases retrieved successfully or KB server status"},
+        200: {
+            "description": "Shared knowledge bases retrieved successfully or KB server status"
+        },
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "x-codeSamples": [
@@ -485,10 +541,10 @@ Example Response (KB Server Offline):
 curl -X GET 'http://localhost:8000/creator/knowledgebases/shared' \\
 -H 'Authorization: Bearer <user_token>'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
         ]
-    }
+    },
 )
 async def get_shared_knowledge_bases(request: Request):
     """
@@ -499,7 +555,7 @@ async def get_shared_knowledge_bases(request: Request):
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
@@ -507,14 +563,18 @@ async def get_shared_knowledge_bases(request: Request):
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
-        
+
         # Get shared knowledge bases from the KB server
-        knowledge_bases = await kb_server_manager.get_org_shared_knowledge_bases(creator_user)
-        
+        knowledge_bases = await kb_server_manager.get_org_shared_knowledge_bases(
+            creator_user
+        )
+
         # Return knowledge bases to the client
-        logger.info(f"Returning {len(knowledge_bases)} shared knowledge bases to client")
+        logger.info(
+            f"Returning {len(knowledge_bases)} shared knowledge bases to client"
+        )
         return {"knowledge_bases": knowledge_bases}
 
     except HTTPException as he:
@@ -526,7 +586,9 @@ async def get_shared_knowledge_bases(request: Request):
 
 @router.post(
     "",
-    response_model=Union[KnowledgeBaseCreateResponse, KnowledgeBaseServerOfflineResponse],
+    response_model=Union[
+        KnowledgeBaseCreateResponse, KnowledgeBaseServerOfflineResponse
+    ],
     tags=["Knowledge Base Management", "kb-server-connection"],
     summary="Create Knowledge Base",
     description="""Create a new knowledge base by connecting to the configured KB server.
@@ -568,11 +630,7 @@ Example Error Response (KB Server Failure):
     dependencies=[Depends(security)],
     openapi_extra={
         "requestBody": {
-            "content": {
-                "application/json": {
-                    "schema": KnowledgeBaseCreate.schema()
-                }
-            }
+            "content": {"application/json": {"schema": KnowledgeBaseCreate.schema()}}
         },
         "x-codeSamples": [
             {
@@ -587,15 +645,12 @@ curl -X POST 'http://localhost:8000/creator/knowledgebases' \\
   "access_control": "private"
 }'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
-        ]
-    }
+        ],
+    },
 )
-async def create_knowledge_base(
-    kb_data: KnowledgeBaseCreate,
-    request: Request
-):
+async def create_knowledge_base(kb_data: KnowledgeBaseCreate, request: Request):
     """
     Create a new knowledge base by connecting to the KB server
     """
@@ -603,7 +658,7 @@ async def create_knowledge_base(
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
@@ -611,44 +666,49 @@ async def create_knowledge_base(
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
-        
+
         # Create the knowledge base using the KB server manager
         result = await kb_server_manager.create_knowledge_base(
-            kb_data=kb_data,
-            creator_user=creator_user
+            kb_data=kb_data, creator_user=creator_user
         )
         logger.info(f"Knowledge base creation result: {result}")
-        
+
         # Check if the result message indicates success regardless of status field
         if result and isinstance(result, dict):
-            if "message" in result and "Knowledge base created successfully" in result.get("message", ""):
+            if (
+                "message" in result
+                and "Knowledge base created successfully" in result.get("message", "")
+            ):
                 # Fix the response to match KnowledgeBaseCreateResponse model
                 # Ensure kb_id and name are included
                 return {
                     "kb_id": str(result.get("kb_id", "")),
                     "name": result.get("name", kb_data.name),
                     "status": "success",
-                    "message": result.get("message", "Knowledge base created successfully")
+                    "message": result.get(
+                        "message", "Knowledge base created successfully"
+                    ),
                 }
-        
+
         # Return original result if no fixing needed
         return result
-                
+
     except HTTPException as he:
         raise he
     except Exception as e:
         logger.error(f"Error creating knowledge base: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error creating knowledge base: {str(e)}"
+            status_code=500, detail=f"Error creating knowledge base: {str(e)}"
         )
 
 
 @router.get(
     "/kb/{kb_id}",
-    response_model=Union[KnowledgeBaseDetailsResponse, KnowledgeBaseServerOfflineResponse],
+    response_model=Union[
+        KnowledgeBaseDetailsResponse, KnowledgeBaseServerOfflineResponse
+    ],
     tags=["Knowledge Base Management", "kb-server-connection"],
     summary="Get Knowledge Base Details",
     description="""Get details of a specific knowledge base, including its files, by connecting to the KB server.
@@ -693,11 +753,19 @@ Example Error Response (Not Found):
     """,
     dependencies=[Depends(security)],
     responses={
-        200: {"description": "Successfully retrieved knowledge base details or KB server status"},
+        200: {
+            "description": "Successfully retrieved knowledge base details or KB server status"
+        },
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         404: {"model": ErrorResponseDetail, "description": "Knowledge Base not found"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "x-codeSamples": [
@@ -707,10 +775,10 @@ Example Error Response (Not Found):
 curl -X GET 'http://localhost:8000/creator/knowledgebases/kb/kb_uuid_1' \\
 -H 'Authorization: Bearer <user_token>'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
         ]
-    }
+    },
 )
 async def get_knowledge_base(kb_id: str, request: Request):
     """
@@ -721,7 +789,7 @@ async def get_knowledge_base(kb_id: str, request: Request):
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
@@ -729,54 +797,60 @@ async def get_knowledge_base(kb_id: str, request: Request):
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
         db_manager = LambDatabaseManager()
-        
+
         # Check access (owner OR shared can view)
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
-        
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
+
         if not can_access:
             raise HTTPException(
-                status_code=404, 
-                detail="Knowledge base not found or not accessible"
+                status_code=404, detail="Knowledge base not found or not accessible"
             )
-        
-        logger.info(f"User {creator_user['id']} accessing KB {kb_id} with access type: {access_type}")
+
+        logger.info(
+            f"User {creator_user['id']} accessing KB {kb_id} with access type: {access_type}"
+        )
 
         # Get knowledge base details from KB server
         # Pass access_type to skip ownership check for shared KBs
-        result = await kb_server_manager.get_knowledge_base_details(kb_id, creator_user, access_type=access_type)
-        
+        result = await kb_server_manager.get_knowledge_base_details(
+            kb_id, creator_user, access_type=access_type
+        )
+
         # Enhance with LAMB metadata
         if isinstance(result, dict):
             entry = db_manager.get_kb_registry_entry(kb_id)
             # Always set can_modify based on access_type, regardless of entry existence
-            result['is_owner'] = (access_type == 'owner')
-            result['can_modify'] = (access_type == 'owner')
+            result["is_owner"] = access_type == "owner"
+            result["can_modify"] = access_type == "owner"
             if entry:
-                result['is_shared'] = entry.get('is_shared', False)
-                if access_type == 'shared':
-                    result['shared_by'] = entry.get('owner_name') or entry.get('owner_email', 'Unknown')
+                result["is_shared"] = entry.get("is_shared", False)
+                if access_type == "shared":
+                    result["shared_by"] = entry.get("owner_name") or entry.get(
+                        "owner_email", "Unknown"
+                    )
             else:
                 # If no entry, assume not shared
-                result['is_shared'] = False
-        
+                result["is_shared"] = False
+
         return result
 
     except HTTPException as he:
         raise he
     except Exception as e:
         logger.error(f"Error getting knowledge base details: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch(
     "/kb/{kb_id}",
-    response_model=Union[KnowledgeBaseUpdateResponse, KnowledgeBaseServerOfflineResponse],
+    response_model=Union[
+        KnowledgeBaseUpdateResponse, KnowledgeBaseServerOfflineResponse
+    ],
     tags=["Knowledge Base Management", "kb-server-connection"],
     summary="Update Knowledge Base",
     description="""Update properties of a knowledge base (name, description, etc.) by connecting to the KB server.
@@ -819,16 +893,18 @@ Example Error Response:
         200: {"description": "Knowledge base updated successfully or KB server status"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         404: {"model": ErrorResponseDetail, "description": "Knowledge Base not found"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "requestBody": {
-            "content": {
-                "application/json": {
-                    "schema": KnowledgeBaseUpdate.schema()
-                }
-            }
+            "content": {"application/json": {"schema": KnowledgeBaseUpdate.schema()}}
         },
         "x-codeSamples": [
             {
@@ -842,15 +918,13 @@ curl -X PATCH 'http://localhost:8000/creator/knowledgebases/kb/kb_uuid_new' \\
   "access_control": "public"
 }'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
-        ]
-    }
+        ],
+    },
 )
 async def update_knowledge_base(
-    kb_id: str,
-    kb_data: KnowledgeBaseUpdate,
-    request: Request
+    kb_id: str, kb_data: KnowledgeBaseUpdate, request: Request
 ):
     """
     Update a knowledge base by connecting to the KB server
@@ -859,7 +933,7 @@ async def update_knowledge_base(
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
@@ -867,33 +941,32 @@ async def update_knowledge_base(
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
         db_manager = LambDatabaseManager()
-        
+
         # Check access (owner only)
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
-        
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
+
         if not can_access:
             raise HTTPException(status_code=404, detail="KB not found")
-        
-        if access_type != 'owner':
+
+        if access_type != "owner":
             raise HTTPException(
-                status_code=403,
-                detail="Only KB owner can update KB settings"
+                status_code=403, detail="Only KB owner can update KB settings"
             )
-        
+
         # Update the knowledge base using the KB server manager
         result = await kb_server_manager.update_knowledge_base(
-            kb_id=kb_id,
-            kb_data=kb_data,
-            creator_user=creator_user
+            kb_id=kb_id, kb_data=kb_data, creator_user=creator_user
         )
-        
+
         # Update cached name in registry if changed
         if kb_data.name is not None and isinstance(result, dict):
             db_manager.update_kb_registry_name(kb_id, kb_data.name)
-        
+
         return result
 
     except HTTPException as he:
@@ -901,8 +974,7 @@ async def update_knowledge_base(
     except Exception as e:
         logger.error(f"Error updating knowledge base: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error updating knowledge base: {str(e)}"
+            status_code=500, detail=f"Error updating knowledge base: {str(e)}"
         )
 
 
@@ -922,83 +994,78 @@ async def update_knowledge_base(
     -d '{"is_shared": true}'
 ```
     """,
-    dependencies=[Depends(security)]
+    dependencies=[Depends(security)],
 )
-async def toggle_kb_sharing(
-    kb_id: str,
-    share_data: KBShareToggle,
-    request: Request
-):
+async def toggle_kb_sharing(kb_id: str, share_data: KBShareToggle, request: Request):
     """
     Toggle KB sharing status (exactly like prompt templates).
     Only owner can change sharing settings.
     """
     logger.info(f"Toggling KB {kb_id} sharing to {share_data.is_shared}")
-    
+
     try:
         # Authenticate creator user
         creator_user = await authenticate_creator_user(request)
         db_manager = LambDatabaseManager()
-        
+
         # Get registry entry
         entry = db_manager.get_kb_registry_entry(kb_id)
         if not entry:
-            raise HTTPException(
-                status_code=404, 
-                detail="Knowledge base not found"
-            )
-        
+            raise HTTPException(status_code=404, detail="Knowledge base not found")
+
         # Verify ownership
-        if entry['owner_user_id'] != creator_user['id']:
+        if entry["owner_user_id"] != creator_user["id"]:
             raise HTTPException(
-                status_code=403,
-                detail="Only KB owner can change sharing settings"
+                status_code=403, detail="Only KB owner can change sharing settings"
             )
-        
+
         # Check if sharing is enabled for the user's organization (only when sharing, not unsharing)
         if share_data.is_shared:
             org = get_user_organization(creator_user)
             if org:
-                config = org.get('config', {})
-                features = config.get('features', {})
-                sharing_enabled = features.get('sharing_enabled', True)
-                
+                config = org.get("config", {})
+                features = config.get("features", {})
+                sharing_enabled = features.get("sharing_enabled", True)
+
                 if not sharing_enabled:
                     raise HTTPException(
                         status_code=403,
-                        detail="Sharing is not enabled for your organization"
+                        detail="Sharing is not enabled for your organization",
                     )
-        
+
         # If trying to unshare, check if KB is used by other users' assistants
         if not share_data.is_shared:
-            using_assistants = db_manager.check_kb_used_by_other_users(kb_id, creator_user['id'])
+            using_assistants = db_manager.check_kb_used_by_other_users(
+                kb_id, creator_user["id"]
+            )
             if using_assistants:
                 # Build list of assistant names for error message
-                assistant_names = [f"{a['name']} (by {a['owner_name']})" for a in using_assistants]
+                assistant_names = [
+                    f"{a['name']} (by {a['owner_name']})" for a in using_assistants
+                ]
                 assistant_list = ", ".join(assistant_names[:3])  # Show first 3
                 if len(using_assistants) > 3:
                     assistant_list += f" and {len(using_assistants) - 3} more"
-                
+
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Cannot unshare KB: It is currently used by {len(using_assistants)} assistant(s): {assistant_list}. Please ask users to remove this KB from their assistants first."
+                    detail=f"Cannot unshare KB: It is currently used by {len(using_assistants)} assistant(s): {assistant_list}. Please ask users to remove this KB from their assistants first.",
                 )
-        
+
         # Toggle sharing
         success = db_manager.toggle_kb_sharing(kb_id, share_data.is_shared)
-        
+
         if not success:
             raise HTTPException(
-                status_code=500, 
-                detail="Failed to update sharing status"
+                status_code=500, detail="Failed to update sharing status"
             )
-        
+
         return {
             "kb_id": kb_id,
             "is_shared": share_data.is_shared,
-            "message": f"KB is now {'shared with organization' if share_data.is_shared else 'private'}"
+            "message": f"KB is now {'shared with organization' if share_data.is_shared else 'private'}",
         }
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1008,7 +1075,9 @@ async def toggle_kb_sharing(
 
 @router.delete(
     "/kb/{kb_id}",
-    response_model=Union[KnowledgeBaseDeleteResponse, KnowledgeBaseServerOfflineResponse],
+    response_model=Union[
+        KnowledgeBaseDeleteResponse, KnowledgeBaseServerOfflineResponse
+    ],
     tags=["Knowledge Base Management", "kb-server-connection"],
     summary="Delete Knowledge Base",
     description="""Delete a knowledge base and its associated data by connecting to the KB server.
@@ -1049,8 +1118,14 @@ Example Error Response (Not Found):
         200: {"description": "Knowledge base deleted successfully or KB server status"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         404: {"model": ErrorResponseDetail, "description": "Knowledge Base not found"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "x-codeSamples": [
@@ -1060,10 +1135,10 @@ Example Error Response (Not Found):
 curl -X DELETE 'http://localhost:8000/creator/knowledgebases/kb/kb_uuid_new' \\
 -H 'Authorization: Bearer <user_token>'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
         ]
-    }
+    },
 )
 async def delete_knowledge_base(kb_id: str, request: Request):
     """
@@ -1073,7 +1148,7 @@ async def delete_knowledge_base(kb_id: str, request: Request):
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
@@ -1081,31 +1156,29 @@ async def delete_knowledge_base(kb_id: str, request: Request):
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
         db_manager = LambDatabaseManager()
-        
+
         # Check access (owner only)
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
-        
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
+
         if not can_access:
             raise HTTPException(status_code=404, detail="KB not found")
-        
-        if access_type != 'owner':
-            raise HTTPException(
-                status_code=403,
-                detail="Only KB owner can delete KB"
-            )
-        
+
+        if access_type != "owner":
+            raise HTTPException(status_code=403, detail="Only KB owner can delete KB")
+
         # Delete the knowledge base using the KB server manager
         result = await kb_server_manager.delete_knowledge_base(
-            kb_id=kb_id,
-            creator_user=creator_user
+            kb_id=kb_id, creator_user=creator_user
         )
-        
+
         # Delete from registry
         db_manager.delete_kb_registry_entry(kb_id)
-        
+
         return result
 
     except HTTPException as he:
@@ -1113,14 +1186,15 @@ async def delete_knowledge_base(kb_id: str, request: Request):
     except Exception as e:
         logger.error(f"Error deleting knowledge base: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error deleting knowledge base: {str(e)}"
+            status_code=500, detail=f"Error deleting knowledge base: {str(e)}"
         )
 
 
 @router.post(
     "/kb/{kb_id}/query",
-    response_model=Union[KnowledgeBaseQueryResponse, KnowledgeBaseServerOfflineResponse],
+    response_model=Union[
+        KnowledgeBaseQueryResponse, KnowledgeBaseServerOfflineResponse
+    ],
     tags=["Knowledge Base Management", "kb-server-connection"],
     summary="Query Knowledge Base",
     description="""Query a specific knowledge base using the configured KB server.
@@ -1177,16 +1251,18 @@ Example Error Response:
         200: {"description": "Query executed successfully or KB server status"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         404: {"model": ErrorResponseDetail, "description": "Knowledge Base not found"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "requestBody": {
-            "content": {
-                "application/json": {
-                    "schema": KnowledgeBaseQuery.schema()
-                }
-            }
+            "content": {"application/json": {"schema": KnowledgeBaseQuery.schema()}}
         },
         "x-codeSamples": [
             {
@@ -1204,54 +1280,57 @@ curl -X POST 'http://localhost:8000/creator/knowledgebases/kb/kb_uuid_1/query' \
   }
 }'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
-        ]
-    }
+        ],
+    },
 )
 async def query_knowledge_base(
-    kb_id: str,
-    query_data: KnowledgeBaseQuery,
-    request: Request
+    kb_id: str, query_data: KnowledgeBaseQuery, request: Request
 ):
     """
     Query a knowledge base by connecting to the KB server
     """
-    logger.info(f"Querying knowledge base {kb_id} via KB server with: {query_data.query_text}")
+    logger.info(
+        f"Querying knowledge base {kb_id} via KB server with: {query_data.query_text}"
+    )
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
         db_manager = LambDatabaseManager()
-        
+
         # Check access (owner OR shared can query)
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
-        
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
+
         if not can_access:
             raise HTTPException(
-                status_code=404, 
-                detail="KB not found or not accessible"
+                status_code=404, detail="KB not found or not accessible"
             )
-        
-        logger.info(f"User {creator_user['id']} querying KB {kb_id} with access type: {access_type}")
-        
+
+        logger.info(
+            f"User {creator_user['id']} querying KB {kb_id} with access type: {access_type}"
+        )
+
         # Both owner and shared users can query
         # Pass access_type to skip ownership check for shared KBs
         result = await kb_server_manager.query_knowledge_base(
             kb_id=kb_id,
             query_data=query_data.dict(),
             creator_user=creator_user,
-            access_type=access_type
+            access_type=access_type,
         )
-        
+
         return result
 
     except HTTPException as he:
@@ -1259,8 +1338,7 @@ async def query_knowledge_base(
     except Exception as e:
         logger.error(f"Error querying knowledge base: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error querying knowledge base: {str(e)}"
+            status_code=500, detail=f"Error querying knowledge base: {str(e)}"
         )
 
 
@@ -1332,11 +1410,19 @@ Example Response (KB Server Offline):
     """,
     dependencies=[Depends(security)],
     responses={
-        200: {"description": "Files processed (check individual statuses) or KB server status"},
+        200: {
+            "description": "Files processed (check individual statuses) or KB server status"
+        },
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         404: {"model": ErrorResponseDetail, "description": "Knowledge Base not found"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "requestBody": {
@@ -1347,10 +1433,10 @@ Example Response (KB Server Offline):
                         "properties": {
                             "files": {
                                 "type": "array",
-                                "items": {"type": "string", "format": "binary"}
+                                "items": {"type": "string", "format": "binary"},
                             }
                         },
-                        "required": ["files"]
+                        "required": ["files"],
                     }
                 }
             }
@@ -1364,15 +1450,13 @@ curl -X POST 'http://localhost:8000/creator/knowledgebases/kb/kb_uuid_1/files' \
 -F 'files=@/path/to/report.pdf' \\
 -F 'files=@/path/to/data.csv'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
-        ]
-    }
+        ],
+    },
 )
 async def upload_files_to_kb(
-    request: Request,
-    kb_id: str,
-    files: List[UploadFile] = File(...)
+    request: Request, kb_id: str, files: List[UploadFile] = File(...)
 ):
     """
     Upload files to a knowledge base by connecting to the KB server
@@ -1381,7 +1465,7 @@ async def upload_files_to_kb(
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
@@ -1389,30 +1473,30 @@ async def upload_files_to_kb(
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
         db_manager = LambDatabaseManager()
-        
+
         # Check access
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
-        
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
+
         if not can_access:
             raise HTTPException(status_code=404, detail="KB not found")
-        
+
         # Only owner can upload
-        if access_type != 'owner':
+        if access_type != "owner":
             raise HTTPException(
                 status_code=403,
-                detail="Only KB owner can upload files. You have read-only access to this shared KB."
+                detail="Only KB owner can upload files. You have read-only access to this shared KB.",
             )
-        
+
         # Upload files to the knowledge base using the KB server manager
         result = await kb_server_manager.upload_files_to_kb(
-            kb_id=kb_id,
-            files=files,
-            creator_user=creator_user
+            kb_id=kb_id, files=files, creator_user=creator_user
         )
-        
+
         return result
 
     except HTTPException as he:
@@ -1420,8 +1504,7 @@ async def upload_files_to_kb(
     except Exception as e:
         logger.error(f"Error uploading files to knowledge base: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error uploading files to knowledge base: {str(e)}"
+            status_code=500, detail=f"Error uploading files to knowledge base: {str(e)}"
         )
 
 
@@ -1468,9 +1551,18 @@ Example Error Response (Not Found):
     responses={
         200: {"description": "File deleted successfully or KB server status"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
-        404: {"model": ErrorResponseDetail, "description": "Knowledge Base or File not found"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        404: {
+            "model": ErrorResponseDetail,
+            "description": "Knowledge Base or File not found",
+        },
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "x-codeSamples": [
@@ -1480,10 +1572,10 @@ Example Error Response (Not Found):
 curl -X DELETE 'http://localhost:8000/creator/knowledgebases/kb/kb_uuid_1/files/file_xyz' \\
 -H 'Authorization: Bearer <user_token>'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
         ]
-    }
+    },
 )
 async def delete_file_from_kb(kb_id: str, file_id: str, request: Request):
     """
@@ -1493,7 +1585,7 @@ async def delete_file_from_kb(kb_id: str, file_id: str, request: Request):
     try:
         # Authenticate creator user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         kb_available = await kb_server_manager.is_kb_server_available(creator_user)
         if not kb_available:
@@ -1501,30 +1593,30 @@ async def delete_file_from_kb(kb_id: str, file_id: str, request: Request):
             return {
                 "status": "error",
                 "message": "Knowledge Base server offline",
-                "kb_server_available": False
+                "kb_server_available": False,
             }
         db_manager = LambDatabaseManager()
-        
+
         # Check access
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
-        
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
+
         if not can_access:
             raise HTTPException(status_code=404, detail="KB not found")
-        
+
         # Only owner can delete files
-        if access_type != 'owner':
+        if access_type != "owner":
             raise HTTPException(
                 status_code=403,
-                detail="Only KB owner can delete files. You have read-only access to this shared KB."
+                detail="Only KB owner can delete files. You have read-only access to this shared KB.",
             )
-        
+
         # Delete the file using the KB server manager
         result = await kb_server_manager.delete_file_from_kb(
-            kb_id=kb_id,
-            file_id=file_id,
-            creator_user=creator_user
+            kb_id=kb_id, file_id=file_id, creator_user=creator_user
         )
-        
+
         return result
 
     except HTTPException as he:
@@ -1532,14 +1624,15 @@ async def delete_file_from_kb(kb_id: str, file_id: str, request: Request):
     except Exception as e:
         logger.error(f"Error deleting file from knowledge base: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error deleting file from knowledge base: {str(e)}"
+            status_code=500, detail=f"Error deleting file from knowledge base: {str(e)}"
         )
 
 
 @router.get(
     "/ingestion-plugins",
-    response_model=Union[GetIngestionPluginsResponse, KnowledgeBaseServerOfflineResponse],
+    response_model=Union[
+        GetIngestionPluginsResponse, KnowledgeBaseServerOfflineResponse
+    ],
     tags=["Knowledge Base Management", "Plugins", "kb-server-connection"],
     summary="Get Ingestion Plugins",
     description="""Get a list of available ingestion plugins and their parameters from the KB server.
@@ -1603,12 +1696,25 @@ Example Response (KB Server Offline):
 }
 ```
     """,
-    dependencies=[Depends(security)], # Added dependency for consistency, adjust if not needed
+    dependencies=[
+        Depends(security)
+    ],  # Added dependency for consistency, adjust if not needed
     responses={
-        200: {"description": "Successfully retrieved ingestion plugins or KB server status"},
-        401: {"model": ErrorResponseDetail, "description": "Authentication failed (if required)"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        200: {
+            "description": "Successfully retrieved ingestion plugins or KB server status"
+        },
+        401: {
+            "model": ErrorResponseDetail,
+            "description": "Authentication failed (if required)",
+        },
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "x-codeSamples": [
@@ -1618,26 +1724,23 @@ Example Response (KB Server Offline):
 curl -X GET 'http://localhost:8000/creator/knowledgebases/ingestion-plugins' \\
 -H 'Authorization: Bearer <user_token>' # Include if required by KB server
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
         ]
-    }
+    },
 )
 async def get_ingestion_plugins(request: Request):
     """
     Get a list of available ingestion plugins and their parameters
     """
     logger.info("Getting available ingestion plugins")
-    
+
     try:
         # First check if KB server is available
         if not await kb_server_manager.is_kb_server_available():
             logger.error("KB server is not available")
-            raise HTTPException(
-                status_code=503,
-                detail="KB server is not available"
-            )
-            
+            raise HTTPException(status_code=503, detail="KB server is not available")
+
         # Get the plugins
         plugins = await kb_server_manager.get_ingestion_plugins()
         logger.info(f"KB-router: Plugins: {plugins}")
@@ -1648,9 +1751,9 @@ async def get_ingestion_plugins(request: Request):
     except Exception as e:
         logger.error(f"Error getting ingestion plugins: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error getting ingestion plugins: {str(e)}"
+            status_code=500, detail=f"Error getting ingestion plugins: {str(e)}"
         )
+
 
 @router.post(
     "/kb/{kb_id}/plugin-ingest-file",
@@ -1699,9 +1802,18 @@ Example Error Response (Invalid Plugin):
     responses={
         200: {"description": "File ingestion started successfully or KB server status"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
-        404: {"model": ErrorResponseDetail, "description": "Knowledge Base or Plugin not found"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        404: {
+            "model": ErrorResponseDetail,
+            "description": "Knowledge Base or Plugin not found",
+        },
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "requestBody": {
@@ -1715,7 +1827,7 @@ Example Error Response (Invalid Plugin):
                             # Plugin parameters are dynamic, cannot be strictly defined here
                             # Indicate that other form fields are possible
                         },
-                        "required": ["plugin_name", "file"]
+                        "required": ["plugin_name", "file"],
                     }
                 }
             }
@@ -1731,10 +1843,10 @@ curl -X POST 'http://localhost:8000/creator/knowledgebases/kb/kb_uuid_1/plugin-i
   -F 'chunk_size=1200' \\
   -F 'chunk_overlap=250'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
-        ]
-    }
+        ],
+    },
 )
 async def plugin_ingest_file(
     kb_id: str,
@@ -1746,58 +1858,59 @@ async def plugin_ingest_file(
     Upload and ingest a file to a knowledge base using a specific plugin
     """
     logger.info(f"Ingesting file to knowledge base {kb_id} using plugin {plugin_name}")
-    
+
     try:
         # Get creator user from the request first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         if not await kb_server_manager.is_kb_server_available(creator_user):
             logger.error("KB server is not available")
-            raise HTTPException(
-                status_code=503,
-                detail="KB server is not available"
-            )
+            raise HTTPException(status_code=503, detail="KB server is not available")
         db_manager = LambDatabaseManager()
-        
+
         # Check access
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
-        
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
+
         if not can_access:
             raise HTTPException(status_code=404, detail="KB not found")
-        
+
         # Only owner can ingest
-        if access_type != 'owner':
+        if access_type != "owner":
             raise HTTPException(
                 status_code=403,
-                detail="Only KB owner can ingest files. You have read-only access to this shared KB."
+                detail="Only KB owner can ingest files. You have read-only access to this shared KB.",
             )
-        
+
         # Verify plugin name is not an index but a valid plugin name
         plugins = await kb_server_manager.get_ingestion_plugins()
         plugin_map = {}
-        
+
         # Create a map of indices to plugin names
         if isinstance(plugins, list):
             for i, plugin in enumerate(plugins):
-                plugin_map[str(i)] = plugin.get('name')
-        elif isinstance(plugins, dict) and 'plugins' in plugins:
-            for i, plugin in enumerate(plugins['plugins']):
-                plugin_map[str(i)] = plugin.get('name')
-        
+                plugin_map[str(i)] = plugin.get("name")
+        elif isinstance(plugins, dict) and "plugins" in plugins:
+            for i, plugin in enumerate(plugins["plugins"]):
+                plugin_map[str(i)] = plugin.get("name")
+
         # If plugin_name is a number, try to convert it to the actual name
         if plugin_name.isdigit() and plugin_name in plugin_map:
             original_plugin_name = plugin_name
             plugin_name = plugin_map[plugin_name]
-            logger.info(f"Converting plugin index {original_plugin_name} to actual plugin name: {plugin_name}")
-        
+            logger.info(
+                f"Converting plugin index {original_plugin_name} to actual plugin name: {plugin_name}"
+            )
+
         # Extract plugin parameters from form data
         form_data = await request.form()
         plugin_params = {}
-        
+
         # Log the raw form data received
         logger.info(f"Raw form data received for plugin ingest: {form_data}")
-        
+
         # Extract all form fields that aren't the file or plugin_name as potential plugin parameters
         for key, value in form_data.items():
             if key not in ["file", "plugin_name"]:
@@ -1808,7 +1921,7 @@ async def plugin_ingest_file(
                     plugin_params[key] = value.lower() == "true"
                 else:
                     plugin_params[key] = value
-        
+
         # Log the extracted plugin parameters
         logger.info(f"Extracted plugin parameters: {plugin_params}")
         logger.info(f"Using actual plugin name: {plugin_name}")
@@ -1819,17 +1932,16 @@ async def plugin_ingest_file(
             file=file,
             plugin_name=plugin_name,
             plugin_params=plugin_params,
-            creator_user=creator_user
+            creator_user=creator_user,
         )
-        
+
         return result
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error ingesting file with plugin: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error ingesting file with plugin: {str(e)}"
+            status_code=500, detail=f"Error ingesting file with plugin: {str(e)}"
         )
 
 
@@ -1843,64 +1955,78 @@ async def plugin_ingest_file(
     responses={
         200: {"description": "Base ingestion started successfully"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
-        404: {"model": ErrorResponseDetail, "description": "Knowledge Base or Plugin not found"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
-    }
+        404: {
+            "model": ErrorResponseDetail,
+            "description": "Knowledge Base or Plugin not found",
+        },
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
+    },
 )
 async def plugin_ingest_base(
-    kb_id: str,
-    body: BasePluginIngestRequest,
-    request: Request
+    kb_id: str, body: BasePluginIngestRequest, request: Request
 ):
     """Run an ingestion plugin without a direct file upload from the user.\n\nCreates an in-memory placeholder text file (optionally containing URL lines if helpful) and then reuses the existing `plugin_ingest_file` pipeline so we do not need to duplicate ownership / permission checks or low-level multipart handling logic in the KB server layer."""
-    logger.info(f"Base ingestion requested for KB {kb_id} using plugin {body.plugin_name} with params: {body.parameters}")
+    logger.info(
+        f"Base ingestion requested for KB {kb_id} using plugin {body.plugin_name} with params: {body.parameters}"
+    )
     try:
         creator_user = await authenticate_creator_user(request)
-        
+
         if not await kb_server_manager.is_kb_server_available(creator_user):
             logger.error("KB server is not available for base ingestion")
             raise HTTPException(status_code=503, detail="KB server is not available")
         db_manager = LambDatabaseManager()
-        
+
         # Check access
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
-        
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
+
         if not can_access:
             raise HTTPException(status_code=404, detail="KB not found")
-        
+
         # Only owner can ingest
-        if access_type != 'owner':
+        if access_type != "owner":
             raise HTTPException(
                 status_code=403,
-                detail="Only KB owner can ingest files. You have read-only access to this shared KB."
+                detail="Only KB owner can ingest files. You have read-only access to this shared KB.",
             )
-
 
         # Build placeholder file content and generate a meaningful, filesystem-safe filename
         import re
         from urllib.parse import urlparse
         import io as _io
-        
+
         try:
             import httpx
+
             HTTPX_AVAILABLE = True
         except ImportError:
             HTTPX_AVAILABLE = False
             logger.warning("httpx not available, will use basic filename generation")
-        
+
         try:
             from bs4 import BeautifulSoup
+
             BS4_AVAILABLE = True
         except ImportError:
             BS4_AVAILABLE = False
-            logger.warning("beautifulsoup4 not available, will use basic filename generation")
+            logger.warning(
+                "beautifulsoup4 not available, will use basic filename generation"
+            )
 
         def slugify(text: str, max_length: int = 80) -> str:
             """Convert text to a filesystem-safe slug."""
             text = text.strip().lower()
-            text = re.sub(r'[^\w\s-]', '', text)
-            text = re.sub(r'[-\s]+', '_', text)
+            text = re.sub(r"[^\w\s-]", "", text)
+            text = re.sub(r"[-\s]+", "_", text)
             return text[:max_length]
 
         async def get_youtube_title(video_url: str) -> str:
@@ -1908,64 +2034,74 @@ async def plugin_ingest_base(
             # First try with yt-dlp if available
             try:
                 import yt_dlp
+
                 ydl_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'skip_download': True,
-                    'extract_flat': True,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "skip_download": True,
+                    "extract_flat": True,
                 }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(video_url, download=False)
-                    if info and 'title' in info:
-                        return info['title']
+                    if info and "title" in info:
+                        return info["title"]
             except Exception as e:
                 logger.warning(f"yt-dlp failed to get YouTube title: {e}")
-            
+
             # Fallback: scrape the page if httpx and bs4 are available
             if not HTTPX_AVAILABLE or not BS4_AVAILABLE:
                 return None
-                
+
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     response = await client.get(video_url, follow_redirects=True)
                     if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, 'html.parser')
+                        soup = BeautifulSoup(response.text, "html.parser")
                         # YouTube stores title in meta tags and title element
-                        title_tag = soup.find('meta', property='og:title')
-                        if title_tag and title_tag.get('content'):
-                            return title_tag['content']
-                        title_element = soup.find('title')
+                        title_tag = soup.find("meta", property="og:title")
+                        if title_tag and title_tag.get("content"):
+                            return title_tag["content"]
+                        title_element = soup.find("title")
                         if title_element:
-                            title = title_element.get_text().replace(' - YouTube', '').strip()
+                            title = (
+                                title_element.get_text()
+                                .replace(" - YouTube", "")
+                                .strip()
+                            )
                             return title
             except Exception as e:
                 logger.warning(f"Web scraping failed to get YouTube title: {e}")
-            
+
             return None
 
         async def get_web_page_title(url: str) -> str:
             """Try to extract web page title."""
             if not HTTPX_AVAILABLE or not BS4_AVAILABLE:
                 return None
-                
+
             try:
-                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                    response = await client.get(url, headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    })
+                async with httpx.AsyncClient(
+                    timeout=10.0, follow_redirects=True
+                ) as client:
+                    response = await client.get(
+                        url,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        },
+                    )
                     if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, 'html.parser')
+                        soup = BeautifulSoup(response.text, "html.parser")
                         # Try og:title first (more reliable)
-                        og_title = soup.find('meta', property='og:title')
-                        if og_title and og_title.get('content'):
-                            return og_title['content']
+                        og_title = soup.find("meta", property="og:title")
+                        if og_title and og_title.get("content"):
+                            return og_title["content"]
                         # Fallback to title element
-                        title = soup.find('title')
+                        title = soup.find("title")
                         if title:
                             return title.get_text().strip()
             except Exception as e:
                 logger.warning(f"Failed to get web page title for {url}: {e}")
-            
+
             return None
 
         content_bytes = b""
@@ -1973,7 +2109,10 @@ async def plugin_ingest_base(
 
         if isinstance(body.parameters, dict):
             # For youtube_transcript_ingest, embed video_url as file content if present
-            if body.plugin_name == "youtube_transcript_ingest" and "video_url" in body.parameters:
+            if (
+                body.plugin_name == "youtube_transcript_ingest"
+                and "video_url" in body.parameters
+            ):
                 video_url = body.parameters["video_url"]
                 if isinstance(video_url, str):
                     content_bytes = (video_url.strip() + "\n").encode("utf-8")
@@ -1982,16 +2121,22 @@ async def plugin_ingest_base(
                     if video_title:
                         # Use the video title as filename with yt: prefix
                         meaningful_filename = f"yt:{slugify(video_title)}.txt"
-                        logger.info(f"Using YouTube video title as filename: {meaningful_filename}")
+                        logger.info(
+                            f"Using YouTube video title as filename: {meaningful_filename}"
+                        )
                     else:
                         # Fallback: Extract YouTube video ID
-                        video_id_match = re.search(r'(?:v=|/)([A-Za-z0-9_-]{11})', video_url)
+                        video_id_match = re.search(
+                            r"(?:v=|/)([A-Za-z0-9_-]{11})", video_url
+                        )
                         if video_id_match:
                             video_id = video_id_match.group(1)
                             meaningful_filename = f"yt:{video_id}.txt"
                         else:
                             meaningful_filename = "yt:youtube_transcript.txt"
-                        logger.info(f"Could not get YouTube title, using fallback: {meaningful_filename}")
+                        logger.info(
+                            f"Could not get YouTube title, using fallback: {meaningful_filename}"
+                        )
             # For url_ingest, embed url as file content if present
             elif body.plugin_name == "url_ingest" and "url" in body.parameters:
                 url_param = body.parameters["url"]
@@ -2002,31 +2147,49 @@ async def plugin_ingest_base(
                     if page_title:
                         # Use the page title as filename with url: prefix
                         meaningful_filename = f"url:{slugify(page_title)}.txt"
-                        logger.info(f"Using web page title as filename: {meaningful_filename}")
+                        logger.info(
+                            f"Using web page title as filename: {meaningful_filename}"
+                        )
                     else:
                         # Fallback: use domain and path
                         parsed = urlparse(url_param)
-                        domain = parsed.netloc.replace("www.", "").replace(".", "_") if parsed.netloc else "url"
-                        path = parsed.path.strip("/").replace("/", "_")[:30] if parsed.path != "/" else ""
+                        domain = (
+                            parsed.netloc.replace("www.", "").replace(".", "_")
+                            if parsed.netloc
+                            else "url"
+                        )
+                        path = (
+                            parsed.path.strip("/").replace("/", "_")[:30]
+                            if parsed.path != "/"
+                            else ""
+                        )
                         if path:
                             meaningful_filename = f"url:{domain}_{path}.txt"
                         else:
                             meaningful_filename = f"url:{domain}.txt"
-                        
+
                         # Clean filename
-                        meaningful_filename = "".join(c for c in meaningful_filename if c.isalnum() or c in "._-:")[:80]
-                        logger.info(f"Could not get page title, using domain/path: {meaningful_filename}")
+                        meaningful_filename = "".join(
+                            c for c in meaningful_filename if c.isalnum() or c in "._-:"
+                        )[:80]
+                        logger.info(
+                            f"Could not get page title, using domain/path: {meaningful_filename}"
+                        )
             else:
                 # Fallback for other plugins: try to use a parameter as identifier
                 for key, value in body.parameters.items():
                     if isinstance(value, str) and value:
                         safe_val = value[:30].replace("/", "_").replace(".", "_")
-                        safe_val = "".join(c for c in safe_val if c.isalnum() or c == "_")
+                        safe_val = "".join(
+                            c for c in safe_val if c.isalnum() or c == "_"
+                        )
                         meaningful_filename = f"{body.plugin_name}_{safe_val}.txt"
                         break
 
         class InMemoryUploadFile:
-            def __init__(self, filename: str, data: bytes, content_type: str = "text/plain"):
+            def __init__(
+                self, filename: str, data: bytes, content_type: str = "text/plain"
+            ):
                 self.filename = filename
                 self._data = data
                 self.file = _io.BytesIO(data)
@@ -2036,9 +2199,7 @@ async def plugin_ingest_base(
                 return self._data
 
         placeholder_file = InMemoryUploadFile(
-            filename=meaningful_filename,
-            data=content_bytes,
-            content_type="text/plain"
+            filename=meaningful_filename, data=content_bytes, content_type="text/plain"
         )
 
         result = await kb_server_manager.plugin_ingest_file(
@@ -2046,22 +2207,26 @@ async def plugin_ingest_base(
             file=placeholder_file,
             plugin_name=body.plugin_name,
             plugin_params=body.parameters or {},
-            creator_user=creator_user
+            creator_user=creator_user,
         )
         return result
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error running base ingestion plugin: {e}")
-        raise HTTPException(status_code=500, detail=f"Error running base ingestion plugin: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error running base ingestion plugin: {e}"
+        )
 
 
 # --- Query Plugins Endpoint ---
+
 
 # Reuse the IngestionPlugin model for individual query plugins if structure matches
 # Define the response model for the list of query plugins
 class GetQueryPluginsResponse(BaseModel):
     plugins: List[IngestionPlugin]
+
 
 @router.get(
     "/query-plugins",
@@ -2115,10 +2280,18 @@ Example Response (KB Server Offline):
     """,
     dependencies=[Depends(security)],
     responses={
-        200: {"description": "Successfully retrieved query plugins or KB server status"},
+        200: {
+            "description": "Successfully retrieved query plugins or KB server status"
+        },
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
-        500: {"model": ErrorResponseDetail, "description": "Internal server error or KB server communication failure"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "Knowledge Base server is offline or not configured"}
+        500: {
+            "model": ErrorResponseDetail,
+            "description": "Internal server error or KB server communication failure",
+        },
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "Knowledge Base server is offline or not configured",
+        },
     },
     openapi_extra={
         "x-codeSamples": [
@@ -2128,10 +2301,10 @@ Example Response (KB Server Offline):
 curl -X GET 'http://localhost:8000/creator/knowledgebases/query-plugins' \\
 -H 'Authorization: Bearer <user_token>'
                 """,
-                "description": "Example cURL request"
+                "description": "Example cURL request",
             }
         ]
-    }
+    },
 )
 async def get_query_plugins(request: Request):
     """
@@ -2142,7 +2315,7 @@ async def get_query_plugins(request: Request):
     try:
         # Authenticate user first to get organization context
         creator_user = await authenticate_creator_user(request)
-        
+
         # Check if KB server is available (using user's organization config)
         if not await kb_server_manager.is_kb_server_available(creator_user):
             logger.warning("KB server is not available for query plugins")
@@ -2151,15 +2324,22 @@ async def get_query_plugins(request: Request):
 
         # Get the plugins from the manager - this method needs to be added
         plugins = await kb_server_manager.get_query_plugins()
-        logger.info(f"KB-router: Query Plugins received: {len(plugins) if isinstance(plugins, list) else 'Invalid format'}")
+        logger.info(
+            f"KB-router: Query Plugins received: {len(plugins) if isinstance(plugins, list) else 'Invalid format'}"
+        )
 
         # Return the plugins wrapped in a dictionary matching the response model
         if isinstance(plugins, list):
-             return {"plugins": plugins}
+            return {"plugins": plugins}
         else:
             # Log error if the manager returned something unexpected
-            logger.error(f"Unexpected response type from kb_server_manager.get_query_plugins: {type(plugins)}")
-            raise HTTPException(status_code=500, detail="Unexpected response format from KB server manager for query plugins.")
+            logger.error(
+                f"Unexpected response type from kb_server_manager.get_query_plugins: {type(plugins)}"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Unexpected response format from KB server manager for query plugins.",
+            )
 
     except HTTPException as he:
         # Re-raise HTTPExceptions (like 401, 503 from manager)
@@ -2168,11 +2348,12 @@ async def get_query_plugins(request: Request):
         logger.error(f"Error getting query plugins: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Internal server error getting query plugins: {str(e)}"
+            detail=f"Internal server error getting query plugins: {str(e)}",
         )
 
 
 # --- Ingestion Status API Endpoints --- #
+
 
 @router.get(
     "/kb/{kb_id}/ingestion-jobs",
@@ -2213,8 +2394,11 @@ Example Response:
         200: {"description": "List of ingestion jobs or KB server status"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         404: {"model": ErrorResponseDetail, "description": "Knowledge Base not found"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "KB server offline"}
-    }
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "KB server offline",
+        },
+    },
 )
 async def list_ingestion_jobs(
     kb_id: str,
@@ -2223,22 +2407,26 @@ async def list_ingestion_jobs(
     limit: int = 50,
     offset: int = 0,
     sort_by: str = "created_at",
-    sort_order: str = "desc"
+    sort_order: str = "desc",
 ):
     """List all ingestion jobs for a knowledge base"""
-    logger.info(f"Listing ingestion jobs for KB {kb_id}, status={status}, limit={limit}, offset={offset}")
-    
+    logger.info(
+        f"Listing ingestion jobs for KB {kb_id}, status={status}, limit={limit}, offset={offset}"
+    )
+
     try:
         creator_user = await authenticate_creator_user(request)
-        
+
         if not await kb_server_manager.is_kb_server_available(creator_user):
             return KnowledgeBaseServerOfflineResponse()
-        
+
         # Check access to KB
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
         if not can_access:
             raise HTTPException(status_code=404, detail="Knowledge Base not found")
-        
+
         # Get ingestion jobs from KB server
         result = await kb_server_manager.list_ingestion_jobs(
             kb_id=kb_id,
@@ -2247,16 +2435,18 @@ async def list_ingestion_jobs(
             limit=limit,
             offset=offset,
             sort_by=sort_by,
-            sort_order=sort_order
+            sort_order=sort_order,
         )
-        
+
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error listing ingestion jobs: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error listing ingestion jobs: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error listing ingestion jobs: {str(e)}"
+        )
 
 
 @router.get(
@@ -2298,42 +2488,43 @@ Example Response (Failed):
         200: {"description": "Ingestion job status or KB server status"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         404: {"model": ErrorResponseDetail, "description": "Job or KB not found"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "KB server offline"}
-    }
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "KB server offline",
+        },
+    },
 )
-async def get_ingestion_job_status(
-    kb_id: str,
-    job_id: int,
-    request: Request
-):
+async def get_ingestion_job_status(kb_id: str, job_id: int, request: Request):
     """Get status of a specific ingestion job"""
     logger.info(f"Getting ingestion job status: KB {kb_id}, Job {job_id}")
-    
+
     try:
         creator_user = await authenticate_creator_user(request)
-        
+
         if not await kb_server_manager.is_kb_server_available(creator_user):
             return KnowledgeBaseServerOfflineResponse()
-        
+
         # Check access to KB
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
         if not can_access:
             raise HTTPException(status_code=404, detail="Knowledge Base not found")
-        
+
         # Get job status from KB server
         result = await kb_server_manager.get_ingestion_job_status(
-            kb_id=kb_id,
-            job_id=job_id,
-            creator_user=creator_user
+            kb_id=kb_id, job_id=job_id, creator_user=creator_user
         )
-        
+
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting ingestion job status: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting ingestion job status: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting ingestion job status: {str(e)}"
+        )
 
 
 @router.get(
@@ -2363,40 +2554,43 @@ Example Response:
         200: {"description": "Ingestion status summary or KB server status"},
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         404: {"model": ErrorResponseDetail, "description": "KB not found"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "KB server offline"}
-    }
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "KB server offline",
+        },
+    },
 )
-async def get_ingestion_status_summary(
-    kb_id: str,
-    request: Request
-):
+async def get_ingestion_status_summary(kb_id: str, request: Request):
     """Get summary of ingestion job statuses for a collection"""
     logger.info(f"Getting ingestion status summary for KB {kb_id}")
-    
+
     try:
         creator_user = await authenticate_creator_user(request)
-        
+
         if not await kb_server_manager.is_kb_server_available(creator_user):
             return KnowledgeBaseServerOfflineResponse()
-        
+
         # Check access to KB
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
         if not can_access:
             raise HTTPException(status_code=404, detail="Knowledge Base not found")
-        
+
         # Get status summary from KB server
         result = await kb_server_manager.get_ingestion_status_summary(
-            kb_id=kb_id,
-            creator_user=creator_user
+            kb_id=kb_id, creator_user=creator_user
         )
-        
+
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting ingestion status summary: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error getting ingestion status summary: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting ingestion status summary: {str(e)}"
+        )
 
 
 @router.post(
@@ -2433,47 +2627,53 @@ Example Response:
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         403: {"model": ErrorResponseDetail, "description": "Not authorized to retry"},
         404: {"model": ErrorResponseDetail, "description": "Job or KB not found"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "KB server offline"}
-    }
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "KB server offline",
+        },
+    },
 )
 async def retry_ingestion_job(
-    kb_id: str,
-    job_id: int,
-    request: Request,
-    body: Optional[RetryJobRequest] = None
+    kb_id: str, job_id: int, request: Request, body: Optional[RetryJobRequest] = None
 ):
     """Retry a failed ingestion job"""
     logger.info(f"Retrying ingestion job: KB {kb_id}, Job {job_id}")
-    
+
     try:
         creator_user = await authenticate_creator_user(request)
-        
+
         if not await kb_server_manager.is_kb_server_available(creator_user):
             return KnowledgeBaseServerOfflineResponse()
-        
+
         # Check access - only owner can retry
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
         if not can_access:
             raise HTTPException(status_code=404, detail="Knowledge Base not found")
-        if access_type != 'owner':
-            raise HTTPException(status_code=403, detail="Only KB owner can retry ingestion jobs")
-        
+        if access_type != "owner":
+            raise HTTPException(
+                status_code=403, detail="Only KB owner can retry ingestion jobs"
+            )
+
         # Retry the job
         override_params = body.override_params if body else None
         result = await kb_server_manager.retry_ingestion_job(
             kb_id=kb_id,
             job_id=job_id,
             creator_user=creator_user,
-            override_params=override_params
+            override_params=override_params,
         )
-        
+
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error retrying ingestion job: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error retrying ingestion job: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error retrying ingestion job: {str(e)}"
+        )
 
 
 @router.post(
@@ -2501,45 +2701,47 @@ Example Response:
         401: {"model": ErrorResponseDetail, "description": "Authentication failed"},
         403: {"model": ErrorResponseDetail, "description": "Not authorized to cancel"},
         404: {"model": ErrorResponseDetail, "description": "Job or KB not found"},
-        503: {"model": KnowledgeBaseServerOfflineResponse, "description": "KB server offline"}
-    }
+        503: {
+            "model": KnowledgeBaseServerOfflineResponse,
+            "description": "KB server offline",
+        },
+    },
 )
-async def cancel_ingestion_job(
-    kb_id: str,
-    job_id: int,
-    request: Request
-):
+async def cancel_ingestion_job(kb_id: str, job_id: int, request: Request):
     """Cancel a pending or processing ingestion job"""
     logger.info(f"Cancelling ingestion job: KB {kb_id}, Job {job_id}")
-    
+
     try:
         creator_user = await authenticate_creator_user(request)
-        
+
         if not await kb_server_manager.is_kb_server_available(creator_user):
             return KnowledgeBaseServerOfflineResponse()
-        
+
         # Check access - only owner can cancel
-        can_access, access_type = db_manager.user_can_access_kb(kb_id, creator_user['id'])
+        can_access, access_type = db_manager.user_can_access_kb(
+            kb_id, creator_user["id"]
+        )
         if not can_access:
             raise HTTPException(status_code=404, detail="Knowledge Base not found")
-        if access_type != 'owner':
-            raise HTTPException(status_code=403, detail="Only KB owner can cancel ingestion jobs")
-        
+        if access_type != "owner":
+            raise HTTPException(
+                status_code=403, detail="Only KB owner can cancel ingestion jobs"
+            )
+
         # Cancel the job
         result = await kb_server_manager.cancel_ingestion_job(
-            kb_id=kb_id,
-            job_id=job_id,
-            creator_user=creator_user
+            kb_id=kb_id, job_id=job_id, creator_user=creator_user
         )
-        
+
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error cancelling ingestion job: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error cancelling ingestion job: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error cancelling ingestion job: {str(e)}"
+        )
 
 
 # --- End Ingestion Status API Endpoints --- #
-

@@ -101,7 +101,9 @@ async def migrate_collection_to_graph(
     _graph_store_or_503()
 
     try:
-        chroma_collection = get_chroma_client().get_collection(name=collection_model.name)
+        chroma_collection = get_chroma_client().get_collection(
+            name=collection_model.name
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=404,
@@ -132,7 +134,8 @@ async def migrate_collection_to_graph(
                 continue
             metadata = (
                 result_metadatas[index]
-                if index < len(result_metadatas) and isinstance(result_metadatas[index], dict)
+                if index < len(result_metadatas)
+                and isinstance(result_metadatas[index], dict)
                 else {}
             )
             ids.append(chunk_id)
@@ -187,9 +190,7 @@ async def get_graph_snapshot(
     document_id: Optional[str] = Query(
         None, description="Filter graph around a document ID"
     ),
-    chunk_id: Optional[str] = Query(
-        None, description="Filter graph around a chunk ID"
-    ),
+    chunk_id: Optional[str] = Query(None, description="Filter graph around a chunk ID"),
     filename: Optional[str] = Query(
         None, description="Filter graph by document filename or document ID text"
     ),

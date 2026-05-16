@@ -24,15 +24,25 @@ def _collection_id_from_path(path: str) -> str | None:
 def _is_graph_write(method: str, path: str) -> bool:
     if method.upper() == "PATCH":
         return True
-    return "concepts/merge" in path or path.endswith("/revert") or path.endswith("/migrate")
+    return (
+        "concepts/merge" in path
+        or path.endswith("/revert")
+        or path.endswith("/migrate")
+    )
 
 
-def _require_collection_access(collection_id: str, creator_user: dict, *, write: bool = False) -> None:
-    can_access, access_type = db_manager.user_can_access_kb(collection_id, creator_user["id"])
+def _require_collection_access(
+    collection_id: str, creator_user: dict, *, write: bool = False
+) -> None:
+    can_access, access_type = db_manager.user_can_access_kb(
+        collection_id, creator_user["id"]
+    )
     if not can_access:
         raise HTTPException(status_code=404, detail="KB not found or not accessible")
     if write and access_type != "owner":
-        raise HTTPException(status_code=403, detail="Only the KB owner can modify graph curation data")
+        raise HTTPException(
+            status_code=403, detail="Only the KB owner can modify graph curation data"
+        )
 
 
 async def _proxy_to_kb(request: Request, creator_user: dict, kb_path: str) -> Response:
@@ -40,12 +50,16 @@ async def _proxy_to_kb(request: Request, creator_user: dict, kb_path: str) -> Re
         kb_config = kb_server_manager._get_kb_config_for_user(creator_user)
     except Exception as exc:
         logger.warning("Could not resolve KB server config: %s", exc)
-        raise HTTPException(status_code=503, detail="Knowledge Base server is not configured") from exc
+        raise HTTPException(
+            status_code=503, detail="Knowledge Base server is not configured"
+        ) from exc
 
     kb_server_url = kb_config.get("url")
     kb_token = kb_config.get("token")
     if not kb_server_url or not kb_token:
-        raise HTTPException(status_code=503, detail="Knowledge Base server is not configured")
+        raise HTTPException(
+            status_code=503, detail="Knowledge Base server is not configured"
+        )
 
     target_url = f"{kb_server_url.rstrip('/')}/{kb_path.lstrip('/')}"
     if request.url.query:
@@ -58,7 +72,9 @@ async def _proxy_to_kb(request: Request, creator_user: dict, kb_path: str) -> Re
 
     body = await request.body()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(120.0, connect=10.0)
+        ) as client:
             kb_response = await client.request(
                 request.method,
                 target_url,
@@ -67,7 +83,9 @@ async def _proxy_to_kb(request: Request, creator_user: dict, kb_path: str) -> Re
             )
     except httpx.RequestError as exc:
         logger.warning("KB proxy request failed for %s: %s", kb_path, exc)
-        raise HTTPException(status_code=503, detail=f"Unable to connect to KB server: {exc}") from exc
+        raise HTTPException(
+            status_code=503, detail=f"Unable to connect to KB server: {exc}"
+        ) from exc
 
     response_headers = {}
     response_content_type = kb_response.headers.get("content-type")

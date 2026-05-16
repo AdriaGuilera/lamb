@@ -9,7 +9,18 @@ import json
 from enum import Enum
 from typing import Optional, Dict, Any
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, ForeignKey, Enum as SQLAlchemyEnum, UniqueConstraint, Float, Boolean
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime,
+    JSON,
+    ForeignKey,
+    Enum as SQLAlchemyEnum,
+    UniqueConstraint,
+    Boolean,
+)
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -17,81 +28,97 @@ Base = declarative_base()
 
 class Visibility(str, Enum):
     """Enum for collection visibility states."""
+
     PRIVATE = "private"
     PUBLIC = "public"
 
 
 class FileStatus(str, Enum):
     """Enum for file/ingestion job status states.
-    
+
     Status Flow:
         PENDING -> PROCESSING -> COMPLETED
                              -> FAILED
                              -> CANCELLED
-        
+
         Any status can transition to DELETED (soft delete)
     """
-    PENDING = "pending"        # Job created but not yet started
+
+    PENDING = "pending"  # Job created but not yet started
     PROCESSING = "processing"  # Job is currently running
-    COMPLETED = "completed"    # Job finished successfully
-    FAILED = "failed"          # Job failed with error
-    CANCELLED = "cancelled"    # Job was cancelled by user
-    DELETED = "deleted"        # Soft-deleted (file may still exist)
+    COMPLETED = "completed"  # Job finished successfully
+    FAILED = "failed"  # Job failed with error
+    CANCELLED = "cancelled"  # Job was cancelled by user
+    DELETED = "deleted"  # Soft-deleted (file may still exist)
 
 
 class Collection(Base):
     """Model representing a knowledge base collection.
-    
+
     Each collection has an associated ChromaDB collection.
     """
+
     __tablename__ = "collections"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
     creation_date = Column(DateTime, default=datetime.datetime.utcnow)
     owner = Column(String(255), nullable=False, index=True)
-    visibility = Column(SQLAlchemyEnum(Visibility), default=Visibility.PRIVATE, nullable=False)
-    embeddings_model = Column(JSON, nullable=False, 
-                              default=lambda: json.dumps({
-                                  "model": "sentence-transformers/all-MiniLM-L6-v2",
-                                  "endpoint": None,
-                                  "apikey": None
-                              }))
+    visibility = Column(
+        SQLAlchemyEnum(Visibility), default=Visibility.PRIVATE, nullable=False
+    )
+    embeddings_model = Column(
+        JSON,
+        nullable=False,
+        default=lambda: json.dumps(
+            {
+                "model": "sentence-transformers/all-MiniLM-L6-v2",
+                "endpoint": None,
+                "apikey": None,
+            }
+        ),
+    )
     chromadb_uuid = Column(String(36), nullable=True, unique=True, index=True)
     graph_enabled = Column(Boolean, default=False, nullable=False)
-    
+
     __table_args__ = (
-        UniqueConstraint('name', 'owner', name='uix_collection_name_owner'),
+        UniqueConstraint("name", "owner", name="uix_collection_name_owner"),
     )
-    
+
     def __repr__(self):
         return f"<Collection id={self.id}, name={self.name}, owner={self.owner}>"
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert the model to a dictionary."""
         return {
             "id": self.id,
             "name": self.name,
             "description": self.description,
-            "creation_date": self.creation_date.isoformat() if self.creation_date else None,
+            "creation_date": (
+                self.creation_date.isoformat() if self.creation_date else None
+            ),
             "owner": self.owner,
             "visibility": self.visibility.value,
-            "embeddings_model": json.loads(self.embeddings_model) if isinstance(self.embeddings_model, str) else self.embeddings_model,
+            "embeddings_model": (
+                json.loads(self.embeddings_model)
+                if isinstance(self.embeddings_model, str)
+                else self.embeddings_model
+            ),
             "chromadb_uuid": self.chromadb_uuid,
-            "graph_enabled": bool(self.graph_enabled)
+            "graph_enabled": bool(self.graph_enabled),
         }
 
 
 class FileRegistry(Base):
     """Model representing files/ingestion jobs in collections.
-    
+
     This tracks each file added to a collection, along with the ingestion parameters,
     status, progress, timing, and error information.
-    
+
     Serves as both a file registry and an ingestion job tracker.
     The `id` field can be used as a `job_id` for tracking ingestion progress.
-    
+
     Attributes:
         id: Primary key, also serves as job_id for ingestion tracking
         collection_id: Foreign key to the parent collection
@@ -104,32 +131,38 @@ class FileRegistry(Base):
         plugin_params: JSON parameters passed to the plugin
         status: Current status of the ingestion job
         document_count: Number of chunks/documents created from this file
-        
+
         # Timing fields
         created_at: When the job was created
         updated_at: When the job record was last modified
         processing_started_at: When processing actually began
         processing_completed_at: When processing finished (success or failure)
-        
+
         # Progress tracking
         progress_current: Current progress value (e.g., chunks processed)
         progress_total: Total expected value (e.g., total chunks)
         progress_message: Human-readable status message
-        
+
         # Error tracking
         error_message: Short error message (max 500 chars)
         error_details: JSON with detailed error info (traceback, context)
-        
+
         owner: Owner identifier for the file
     """
+
     __tablename__ = "file_registry"
-    
+
     # ═══════════════════════════════════════════════════════════════════════════
     # PRIMARY FIELDS
     # ═══════════════════════════════════════════════════════════════════════════
     id = Column(Integer, primary_key=True, autoincrement=True)
-    collection_id = Column(Integer, ForeignKey("collections.id", ondelete="CASCADE"), nullable=False, index=True)
-    
+    collection_id = Column(
+        Integer,
+        ForeignKey("collections.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
     # ═══════════════════════════════════════════════════════════════════════════
     # FILE INFORMATION
     # ═══════════════════════════════════════════════════════════════════════════
@@ -138,40 +171,52 @@ class FileRegistry(Base):
     file_url = Column(String(255), nullable=False)
     file_size = Column(Integer, nullable=False, default=0)
     content_type = Column(String(100), nullable=True)
-    
+
     # ═══════════════════════════════════════════════════════════════════════════
     # PLUGIN CONFIGURATION
     # ═══════════════════════════════════════════════════════════════════════════
     plugin_name = Column(String(100), nullable=False)
     plugin_params = Column(JSON, nullable=False, default=dict)
-    
+
     # ═══════════════════════════════════════════════════════════════════════════
     # STATUS & RESULTS
     # ═══════════════════════════════════════════════════════════════════════════
-    status = Column(SQLAlchemyEnum(FileStatus), default=FileStatus.PENDING, nullable=False, index=True)
+    status = Column(
+        SQLAlchemyEnum(FileStatus),
+        default=FileStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
     document_count = Column(Integer, default=0, nullable=False)
-    
+
     # ═══════════════════════════════════════════════════════════════════════════
     # TIMING FIELDS
     # ═══════════════════════════════════════════════════════════════════════════
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
     processing_started_at = Column(DateTime, nullable=True)
     processing_completed_at = Column(DateTime, nullable=True)
-    
+
     # ═══════════════════════════════════════════════════════════════════════════
     # PROGRESS TRACKING
     # ═══════════════════════════════════════════════════════════════════════════
     progress_current = Column(Integer, default=0, nullable=False)
     progress_total = Column(Integer, default=0, nullable=False)
     progress_message = Column(String(255), nullable=True)
-    
+
     # ═══════════════════════════════════════════════════════════════════════════
     # ERROR TRACKING
     # ═══════════════════════════════════════════════════════════════════════════
     error_message = Column(Text, nullable=True)  # Short error message
-    error_details = Column(JSON, nullable=True)  # Detailed error info (traceback, context)
-    
+    error_details = Column(
+        JSON, nullable=True
+    )  # Detailed error info (traceback, context)
+
     # ═══════════════════════════════════════════════════════════════════════════
     # PROCESSING STATISTICS (Added Jan 2026)
     # Detailed statistics collected during ingestion processing
@@ -208,15 +253,15 @@ class FileRegistry(Base):
     #     },
     #     "markdown_preview": str          # First ~2000 chars of markdown content
     # }
-    
+
     # ═══════════════════════════════════════════════════════════════════════════
     # OWNERSHIP
     # ═══════════════════════════════════════════════════════════════════════════
     owner = Column(String(255), nullable=False, index=True)
-    
+
     def __repr__(self):
         return f"<FileRegistry id={self.id}, collection_id={self.collection_id}, filename={self.original_filename}, status={self.status.value}>"
-    
+
     @property
     def processing_duration_seconds(self) -> Optional[float]:
         """Calculate processing duration in seconds."""
@@ -224,14 +269,14 @@ class FileRegistry(Base):
             delta = self.processing_completed_at - self.processing_started_at
             return delta.total_seconds()
         return None
-    
+
     @property
     def progress_percentage(self) -> float:
         """Calculate progress percentage (0-100)."""
         if self.progress_total > 0:
             return round((self.progress_current / self.progress_total) * 100, 2)
         return 0.0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert the model to a dictionary."""
         # Parse processing_stats if it's a string
@@ -241,7 +286,7 @@ class FileRegistry(Base):
                 processing_stats = json.loads(processing_stats)
             except:
                 processing_stats = None
-        
+
         return {
             "id": self.id,
             "collection_id": self.collection_id,
@@ -251,13 +296,25 @@ class FileRegistry(Base):
             "file_size": self.file_size,
             "content_type": self.content_type,
             "plugin_name": self.plugin_name,
-            "plugin_params": json.loads(self.plugin_params) if isinstance(self.plugin_params, str) else self.plugin_params,
+            "plugin_params": (
+                json.loads(self.plugin_params)
+                if isinstance(self.plugin_params, str)
+                else self.plugin_params
+            ),
             "status": self.status.value,
             "document_count": self.document_count,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "processing_started_at": self.processing_started_at.isoformat() if self.processing_started_at else None,
-            "processing_completed_at": self.processing_completed_at.isoformat() if self.processing_completed_at else None,
+            "processing_started_at": (
+                self.processing_started_at.isoformat()
+                if self.processing_started_at
+                else None
+            ),
+            "processing_completed_at": (
+                self.processing_completed_at.isoformat()
+                if self.processing_completed_at
+                else None
+            ),
             "processing_duration_seconds": self.processing_duration_seconds,
             "progress_current": self.progress_current,
             "progress_total": self.progress_total,
@@ -266,9 +323,9 @@ class FileRegistry(Base):
             "error_message": self.error_message,
             "error_details": self.error_details,
             "processing_stats": processing_stats,
-            "owner": self.owner
+            "owner": self.owner,
         }
-    
+
     def to_job_dict(self) -> Dict[str, Any]:
         """Convert to ingestion job response format."""
         base = self.to_dict()
@@ -277,7 +334,7 @@ class FileRegistry(Base):
             "current": self.progress_current,
             "total": self.progress_total,
             "percentage": self.progress_percentage,
-            "message": self.progress_message
+            "message": self.progress_message,
         }
         # processing_stats is already included from to_dict()
         return base

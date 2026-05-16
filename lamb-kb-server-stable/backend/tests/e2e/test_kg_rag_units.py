@@ -1110,7 +1110,12 @@ def test_graph_store_read_methods_and_collection_graph(monkeypatch):
     assert graph_store.get_change(5, "org-1", "missing") is None
     assert graph_store.delete_collection(5) is None
     empty_graph = graph_store.get_collection_graph(5, "org-1")
-    assert empty_graph["counts"] == {"concepts": 0, "documents": 0, "chunks": 0, "edges": 0}
+    assert empty_graph["counts"] == {
+        "concepts": 0,
+        "documents": 0,
+        "chunks": 0,
+        "edges": 0,
+    }
 
 
 def test_graph_store_collection_graph_no_concepts(monkeypatch):
@@ -1951,7 +1956,12 @@ def test_collection_graph_unconfigured_returns_empty_snapshot():
     assert snapshot["nodes"] == []
     assert snapshot["edges"] == []
     assert snapshot["filters"]["concept"] == "Knowledge Graph"
-    assert snapshot["counts"] == {"concepts": 0, "documents": 0, "chunks": 0, "edges": 0}
+    assert snapshot["counts"] == {
+        "concepts": 0,
+        "documents": 0,
+        "chunks": 0,
+        "edges": 0,
+    }
 
 
 def test_benchmark_scores_precision_recall_mrr_by_filename():

@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
 
 
 class KnowledgeBaseMetadata(BaseModel):
@@ -47,4 +47,4 @@ class KnowledgeBaseResponse(BaseModel):
 
 
 class KnowledgeBaseListResponse(BaseModel):
-    knowledge_bases: List[Dict[str, Any]] 
+    knowledge_bases: List[Dict[str, Any]]

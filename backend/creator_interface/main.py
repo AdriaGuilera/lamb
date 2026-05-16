@@ -7,15 +7,21 @@ from lamb.aac.router import router as aac_router
 from lamb.services.test_router import router as test_router
 from .learning_assistant_proxy import router as learning_assistant_proxy_router
 from .organization_router import router as organization_router
-from .setup_translations import setup_translations
-from fastapi import APIRouter, Request, Form, Response, HTTPException, File, UploadFile, Depends, BackgroundTasks
+from fastapi import (
+    APIRouter,
+    Request,
+    Form,
+    HTTPException,
+    File,
+    UploadFile,
+    Depends,
+    BackgroundTasks,
+)
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pathlib import Path
 import gettext
 import os
-from fastapi.staticfiles import StaticFiles
 import httpx
 from dotenv import load_dotenv
 from typing import Optional, List
@@ -25,11 +31,10 @@ from lamb.owi_bridge.owi_users import OwiUserManager
 from .assistant_router import router as assistant_router
 from .knowledges_router import router as knowledges_router
 from .kg_rag_proxy_router import router as kg_rag_proxy_router
-from lamb.auth_context import AuthContext, get_auth_context, require_admin
+from lamb.auth_context import AuthContext, get_auth_context
 import json
 import shutil
 from pydantic import BaseModel, EmailStr
-from fastapi import Body  # Import Body for request body definitions
 from lamb.logging_config import get_logger
 import time
 import asyncio
@@ -41,17 +46,17 @@ logger = get_logger(__name__, component="API")
 load_dotenv()
 
 # Get environment variables
-SIGNUP_ENABLED = os.getenv('SIGNUP_ENABLED', 'false').lower() == 'true'
-SIGNUP_SECRET_KEY = os.getenv('SIGNUP_SECRET_KEY')
-LAMB_NEWS_HOME = os.getenv('LAMB_NEWS_HOME', 'https://lamb-project.org/news/')
-LAMB_NEWS_DEFAULT_LANG = os.getenv('LAMB_NEWS_DEFAULT_LANG', 'en')
+SIGNUP_ENABLED = os.getenv("SIGNUP_ENABLED", "false").lower() == "true"
+SIGNUP_SECRET_KEY = os.getenv("SIGNUP_SECRET_KEY")
+LAMB_NEWS_HOME = os.getenv("LAMB_NEWS_HOME", "https://lamb-project.org/news/")
+LAMB_NEWS_DEFAULT_LANG = os.getenv("LAMB_NEWS_DEFAULT_LANG", "en")
 
 # Cache configuration
-NEWS_CACHE_DIR = Path(__file__).parent.parent / 'static' / 'cache' / 'news'
+NEWS_CACHE_DIR = Path(__file__).parent.parent / "static" / "cache" / "news"
 NEWS_CACHE_TIMEOUT = 5.0  # Timeout in seconds for fetching from origin
 NEWS_CACHE_REFRESH_INTERVAL = 3600  # Refresh cache every hour (in seconds)
 # Supported languages for news
-NEWS_SUPPORTED_LANGUAGES = ['en', 'es', 'ca', 'eu']
+NEWS_SUPPORTED_LANGUAGES = ["en", "es", "ca", "eu"]
 
 # Note: LAMB_WEB_HOST, LAMB_BACKEND_HOST, and LAMB_BEARER_TOKEN are configured in config.py
 # Other modules import from config module instead of reading these directly
@@ -110,6 +115,7 @@ async def stop_news_cache_refresh_loop():
         _news_refresh_task = None
         logger.info("News cache refresh loop stopped")
 
+
 # Include the assistant router
 router.include_router(assistant_router, prefix="/assistant")
 
@@ -150,19 +156,18 @@ router.include_router(library_router, prefix="/libraries")
 
 # Configuration Endpoints
 
+
 @router.get("/config/ingestion")
 async def get_ingestion_config():
     """Get ingestion configuration values.
-    
+
     Returns configuration such as:
     - refresh_rate: How often (in seconds) the frontend should poll job status
-    
+
     Returns:
         Dictionary with configuration values
     """
-    return {
-        "refresh_rate": int(os.getenv("INGESTION_JOB_REFRESH_RATE", "3"))
-    }
+    return {"refresh_rate": int(os.getenv("INGESTION_JOB_REFRESH_RATE", "3"))}
 
 
 # Initialize security
@@ -315,11 +320,13 @@ class NewsResponse(BaseModel):
 # Assistant Sharing Models
 class UpdateSharesRequest(BaseModel):
     """Request body for updating assistant shares"""
+
     user_emails: List[str]
 
 
 class ShareUserResponse(BaseModel):
     """Response model for a shared user"""
+
     user_email: str
     user_name: str
     shared_at: int
@@ -328,6 +335,7 @@ class ShareUserResponse(BaseModel):
 
 class OrganizationUserResponse(BaseModel):
     """Response model for organization user in sharing UI"""
+
     email: str
     name: str
     user_type: str
@@ -335,13 +343,16 @@ class OrganizationUserResponse(BaseModel):
 
 class SharingPermissionResponse(BaseModel):
     """Response model for sharing permission check"""
+
     can_share: bool
     message: str = ""
+
 
 # --- End Pydantic Models ---
 
 
 # --- Cache Utility Functions ---
+
 
 def get_cache_file_path(lang: str) -> Path:
     """Get the cache file path for a specific language."""
@@ -359,7 +370,7 @@ def read_from_cache(lang: str) -> Optional[str]:
     try:
         if cache_file.exists():
             logger.info(f"Reading cached news for language '{lang}'")
-            return cache_file.read_text(encoding='utf-8')
+            return cache_file.read_text(encoding="utf-8")
     except Exception as e:
         logger.warning(f"Failed to read cache for language '{lang}': {e}")
     return None
@@ -370,12 +381,10 @@ def get_cache_age(lang: str) -> Optional[float]:
     timestamp_file = get_cache_timestamp_path(lang)
     try:
         if timestamp_file.exists():
-            cache_time = float(timestamp_file.read_text(
-                encoding='utf-8').strip())
+            cache_time = float(timestamp_file.read_text(encoding="utf-8").strip())
             return time.time() - cache_time
     except Exception as e:
-        logger.warning(
-            f"Failed to read cache timestamp for language '{lang}': {e}")
+        logger.warning(f"Failed to read cache timestamp for language '{lang}': {e}")
     return None
 
 
@@ -394,11 +403,11 @@ def write_to_cache(lang: str, content: str) -> bool:
 
         # Write content
         cache_file = get_cache_file_path(lang)
-        cache_file.write_text(content, encoding='utf-8')
+        cache_file.write_text(content, encoding="utf-8")
 
         # Write timestamp
         timestamp_file = get_cache_timestamp_path(lang)
-        timestamp_file.write_text(str(time.time()), encoding='utf-8')
+        timestamp_file.write_text(str(time.time()), encoding="utf-8")
 
         logger.info(f"Cached news for language '{lang}'")
         return True
@@ -420,11 +429,13 @@ async def fetch_and_cache_news(lang: str) -> Optional[str]:
                 content = response.text
                 write_to_cache(lang, content)
                 logger.info(
-                    f"Successfully fetched and cached news for language '{lang}' ({len(content)} characters)")
+                    f"Successfully fetched and cached news for language '{lang}' ({len(content)} characters)"
+                )
                 return content
             else:
                 logger.warning(
-                    f"Failed to fetch news for language '{lang}': HTTP {response.status_code}")
+                    f"Failed to fetch news for language '{lang}': HTTP {response.status_code}"
+                )
                 return None
 
     except Exception as e:
@@ -505,14 +516,11 @@ async def login(email: str = Form(...), password: str = Form(...)):
                 # Include user_type
                 "user_type": result["data"].get("user_type", "creator"),
                 # Include organization role
-                "organization_role": result["data"].get("organization_role")
-            }
+                "organization_role": result["data"].get("organization_role"),
+            },
         }
     else:
-        return {
-            "success": False,
-            "error": result["error"]
-        }
+        return {"success": False, "error": result["error"]}
 
 
 @router.get(
@@ -542,7 +550,7 @@ async def get_current_user(auth: AuthContext = Depends(get_auth_context)):
             "user_type": auth.user.get("user_type", "creator"),
             "organization_role": auth.organization_role,
             "launch_url": launch_url,
-        }
+        },
     }
 
 
@@ -607,10 +615,16 @@ Example Forbidden Response:
     """,
     dependencies=[Depends(security)],
     responses={
-        200: {"model": ListUsersResponse, "description": "Successfully retrieved users."},
+        200: {
+            "model": ListUsersResponse,
+            "description": "Successfully retrieved users.",
+        },
     },
 )
-async def list_users(credentials: HTTPAuthorizationCredentials = Depends(security), auth: AuthContext = Depends(get_auth_context)):
+async def list_users(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    auth: AuthContext = Depends(get_auth_context),
+):
     """List all creator users (admin only) as JSON"""
     # Check admin privileges via AuthContext
     if not auth.is_system_admin:
@@ -618,14 +632,15 @@ async def list_users(credentials: HTTPAuthorizationCredentials = Depends(securit
             status_code=403,
             content={
                 "success": False,
-                "error": "Access denied. Admin privileges required."
-            }
+                "error": "Access denied. Admin privileges required.",
+            },
         )
 
     # User is admin, proceed with fetching the list of users
     try:
         # Use the database_manager directly to get users with organization info
         from lamb.database_manager import LambDatabaseManager
+
         db_manager = LambDatabaseManager()
 
         users = db_manager.get_creator_users()
@@ -633,10 +648,7 @@ async def list_users(credentials: HTTPAuthorizationCredentials = Depends(securit
         if users is None:
             return JSONResponse(
                 status_code=500,
-                content={
-                    "success": False,
-                    "error": "Failed to retrieve users"
-                }
+                content={"success": False, "error": "Failed to retrieve users"},
             )
 
         # Build user list — role now comes from LAMB DB (no OWI lookup needed)
@@ -654,22 +666,16 @@ async def list_users(credentials: HTTPAuthorizationCredentials = Depends(securit
                 "organization": user.get("organization"),
                 "organization_role": user.get("organization_role"),
                 "auth_provider": user.get("auth_provider", "password"),
-                "lti_user_id": user.get("lti_user_id")
+                "lti_user_id": user.get("lti_user_id"),
             }
             users_with_roles.append(user_data)
 
-        return {
-            "success": True,
-            "data": users_with_roles
-        }
+        return {"success": True, "data": users_with_roles}
 
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={
-                "success": False,
-                "error": f"Error retrieving users: {str(e)}"
-            }
+            content={"success": False, "error": f"Error retrieving users: {str(e)}"},
         )
 
 
@@ -707,7 +713,10 @@ Example Error Response (Wrong Key):
     """,
     responses={
         200: {"model": SignupSuccessResponse, "description": "Signup successful"},
-        400: {"model": SignupErrorResponse, "description": "Signup failed (e.g., disabled, wrong key, user exists)"},
+        400: {
+            "model": SignupErrorResponse,
+            "description": "Signup failed (e.g., disabled, wrong key, user exists)",
+        },
     },
 )
 async def signup(
@@ -715,7 +724,7 @@ async def signup(
     email: str = Form(...),
     name: str = Form(...),
     password: str = Form(...),
-    secret_key: str = Form(...)
+    secret_key: str = Form(...),
 ):
     """Handle signup form submission with organization-specific support"""
     try:
@@ -725,99 +734,96 @@ async def signup(
         if target_org:
             # Organization-specific signup found
             logger.info(
-                f"Creating user in organization '{target_org['slug']}' using signup key")
+                f"Creating user in organization '{target_org['slug']}' using signup key"
+            )
 
             user_creator = UserCreatorManager()
             result = await user_creator.create_user(
                 email=email,
                 name=name,
                 password=password,
-                organization_id=target_org['id']
+                organization_id=target_org["id"],
             )
 
             if result["success"]:
                 # Assign member role to user in the organization
-                if db_manager.assign_organization_role(target_org['id'], result.get('user_id'), "member"):
+                if db_manager.assign_organization_role(
+                    target_org["id"], result.get("user_id"), "member"
+                ):
                     logger.info(
-                        f"Assigned member role to user {email} in organization {target_org['slug']}")
+                        f"Assigned member role to user {email} in organization {target_org['slug']}"
+                    )
                 else:
                     logger.warning(
-                        f"Failed to assign role to user {email} in organization {target_org['slug']}")
+                        f"Failed to assign role to user {email} in organization {target_org['slug']}"
+                    )
 
                 return {
                     "success": True,
-                    "message": f"Account created successfully in {target_org['name']}"
+                    "message": f"Account created successfully in {target_org['name']}",
                 }
             else:
-                return {
-                    "success": False,
-                    "error": result["error"]
-                }
+                return {"success": False, "error": result["error"]}
 
         # Step 2: Fallback to system organization signup
         elif SIGNUP_ENABLED and secret_key == SIGNUP_SECRET_KEY:
             # Legacy system signup
-            logger.info(
-                "Creating user in system organization using legacy signup key")
+            logger.info("Creating user in system organization using legacy signup key")
 
             # Get system organization
             system_org = db_manager.get_organization_by_slug("lamb")
             if not system_org:
-                return {
-                    "success": False,
-                    "error": "System organization not found"
-                }
+                return {"success": False, "error": "System organization not found"}
 
             user_creator = UserCreatorManager()
             result = await user_creator.create_user(
                 email=email,
                 name=name,
                 password=password,
-                organization_id=system_org['id']
+                organization_id=system_org["id"],
             )
 
             if result["success"]:
                 # Assign member role to user in the system organization
-                if db_manager.assign_organization_role(system_org['id'], result.get('user_id'), "member"):
+                if db_manager.assign_organization_role(
+                    system_org["id"], result.get("user_id"), "member"
+                ):
                     logger.info(
-                        f"Assigned member role to user {email} in system organization")
+                        f"Assigned member role to user {email} in system organization"
+                    )
                 else:
                     logger.warning(
-                        f"Failed to assign role to user {email} in system organization")
+                        f"Failed to assign role to user {email} in system organization"
+                    )
 
-                return {
-                    "success": True,
-                    "message": "Account created successfully"
-                }
+                return {"success": True, "message": "Account created successfully"}
             else:
-                return {
-                    "success": False,
-                    "error": result["error"]
-                }
+                return {"success": False, "error": result["error"]}
 
         # Step 3: No valid signup method found
         else:
             if not SIGNUP_ENABLED:
                 return {
                     "success": False,
-                    "error": "Signup is currently disabled. Please contact your administrator or use a valid organization signup key."
+                    "error": "Signup is currently disabled. Please contact your administrator or use a valid organization signup key.",
                 }
             else:
                 return {
                     "success": False,
-                    "error": "Invalid signup key. Please check your signup key or contact your organization administrator."
+                    "error": "Invalid signup key. Please check your signup key or contact your organization administrator.",
                 }
 
     except Exception as e:
         logger.error(f"Signup error: {str(e)}")
         return {
             "success": False,
-            "error": "An unexpected error occurred. Please try again."
+            "error": "An unexpected error occurred. Please try again.",
         }
 
+
 # Add these constants after the other constants
-ALLOWED_EXTENSIONS = {'.txt', '.json', '.md'}
-STATIC_DIR = Path(__file__).parent.parent / 'static' / 'public'
+ALLOWED_EXTENSIONS = {".txt", ".json", ".md"}
+STATIC_DIR = Path(__file__).parent.parent / "static" / "public"
 
 # Add these new routes after the existing routes
 
@@ -849,7 +855,10 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
     responses={
-        200: {"model": CreateUserAdminResponse, "description": "User created successfully."},
+        200: {
+            "model": CreateUserAdminResponse,
+            "description": "User created successfully.",
+        },
     },
 )
 async def create_user_admin(
@@ -860,7 +869,7 @@ async def create_user_admin(
     role: str = Form("user"),
     organization_id: int = Form(None),
     user_type: str = Form("creator"),  # 'creator' or 'end_user'
-    auth: AuthContext = Depends(get_auth_context)
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Create a new user (admin only)"""
     if not auth.is_system_admin:
@@ -868,8 +877,8 @@ async def create_user_admin(
             status_code=403,
             content={
                 "success": False,
-                "error": "Access denied. Admin privileges required."
-            }
+                "error": "Access denied. Admin privileges required.",
+            },
         )
 
     # Ensure admin users have user_type='creator' (admins are always creators)
@@ -880,32 +889,26 @@ async def create_user_admin(
     try:
         user_creator = UserCreatorManager()
         # Pass the role, organization_id, and user_type parameters to create_user method
-        result = await user_creator.create_user(email, name, password, role, organization_id, user_type)
+        result = await user_creator.create_user(
+            email, name, password, role, organization_id, user_type
+        )
 
         if result["success"]:
             return JSONResponse(
                 status_code=200,
                 content={
                     "success": True,
-                    "message": f"User {email} created successfully"
-                }
+                    "message": f"User {email} created successfully",
+                },
             )
         else:
             return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": result["error"]
-                }
+                status_code=400, content={"success": False, "error": result["error"]}
             )
 
-    except Exception as e:
+    except Exception:
         return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": "Server error"
-            }
+            status_code=500, content={"success": False, "error": "Server error"}
         )
 
 
@@ -934,14 +937,17 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
     responses={
-        200: {"model": UpdatePasswordAdminResponse, "description": "Password updated successfully."},
+        200: {
+            "model": UpdatePasswordAdminResponse,
+            "description": "Password updated successfully.",
+        },
     },
 )
 async def update_user_password_admin(
     request: Request,
     email: str = Form(...),
     new_password: str = Form(...),
-    auth: AuthContext = Depends(get_auth_context)
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Update a user's password (admin only)"""
     if not auth.is_system_admin:
@@ -949,8 +955,8 @@ async def update_user_password_admin(
             status_code=403,
             content={
                 "success": False,
-                "error": "Access denied. Admin privileges required."
-            }
+                "error": "Access denied. Admin privileges required.",
+            },
         )
 
     # User is admin, proceed with updating the password
@@ -963,25 +969,17 @@ async def update_user_password_admin(
                 status_code=200,
                 content={
                     "success": True,
-                    "message": f"Password for user {email} updated successfully"
-                }
+                    "message": f"Password for user {email} updated successfully",
+                },
             )
         else:
             return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": result["error"]
-                }
+                status_code=400, content={"success": False, "error": result["error"]}
             )
 
-    except Exception as e:
+    except Exception:
         return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": "Server error"
-            }
+            status_code=500, content={"success": False, "error": "Server error"}
         )
 
 
@@ -1007,29 +1005,23 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
 )
-async def disable_user(
-    user_id: int,
-    auth: AuthContext = Depends(get_auth_context)
-):
+async def disable_user(user_id: int, auth: AuthContext = Depends(get_auth_context)):
     """Disable a user account (admin only)"""
     if not auth.is_system_admin:
         return JSONResponse(
             status_code=403,
             content={
                 "success": False,
-                "error": "Access denied. Admin privileges required."
-            }
+                "error": "Access denied. Admin privileges required.",
+            },
         )
 
     # Get current user to prevent self-disable
     creator_user = auth.user
-    if creator_user and creator_user['id'] == user_id:
+    if creator_user and creator_user["id"] == user_id:
         return JSONResponse(
             status_code=400,
-            content={
-                "success": False,
-                "error": "Cannot disable your own account"
-            }
+            content={"success": False, "error": "Cannot disable your own account"},
         )
 
     # Check if user exists
@@ -1038,11 +1030,7 @@ async def disable_user(
 
     if not target_user:
         return JSONResponse(
-            status_code=404,
-            content={
-                "success": False,
-                "error": "User not found"
-            }
+            status_code=404, content={"success": False, "error": "User not found"}
         )
 
     # Disable user
@@ -1053,8 +1041,8 @@ async def disable_user(
             status_code=400,
             content={
                 "success": False,
-                "error": "Unable to disable user (may already be disabled)"
-            }
+                "error": "Unable to disable user (may already be disabled)",
+            },
         )
 
     logger.info(f"Admin {creator_user['email']} disabled user {user_id}")
@@ -1063,8 +1051,8 @@ async def disable_user(
         status_code=200,
         content={
             "success": True,
-            "message": f"User {target_user['user_email']} has been disabled"
-        }
+            "message": f"User {target_user['user_email']} has been disabled",
+        },
     )
 
 
@@ -1090,18 +1078,15 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
 )
-async def enable_user(
-    user_id: int,
-    auth: AuthContext = Depends(get_auth_context)
-):
+async def enable_user(user_id: int, auth: AuthContext = Depends(get_auth_context)):
     """Enable a user account (admin only)"""
     if not auth.is_system_admin:
         return JSONResponse(
             status_code=403,
             content={
                 "success": False,
-                "error": "Access denied. Admin privileges required."
-            }
+                "error": "Access denied. Admin privileges required.",
+            },
         )
 
     # Check if user exists
@@ -1110,11 +1095,7 @@ async def enable_user(
 
     if not target_user:
         return JSONResponse(
-            status_code=404,
-            content={
-                "success": False,
-                "error": "User not found"
-            }
+            status_code=404, content={"success": False, "error": "User not found"}
         )
 
     # Enable user
@@ -1125,8 +1106,8 @@ async def enable_user(
             status_code=400,
             content={
                 "success": False,
-                "error": "Unable to enable user (may already be enabled)"
-            }
+                "error": "Unable to enable user (may already be enabled)",
+            },
         )
 
     logger.info(f"Admin {auth.user['email']} enabled user {user_id}")
@@ -1135,8 +1116,8 @@ async def enable_user(
         status_code=200,
         content={
             "success": True,
-            "message": f"User {target_user['user_email']} has been enabled"
-        }
+            "message": f"User {target_user['user_email']} has been enabled",
+        },
     )
 
 
@@ -1172,8 +1153,7 @@ Example Success Response:
     dependencies=[Depends(security)],
 )
 async def disable_users_bulk(
-    request: Request,
-    auth: AuthContext = Depends(get_auth_context)
+    request: Request, auth: AuthContext = Depends(get_auth_context)
 ):
     """Disable multiple users (admin only)"""
     if not auth.is_system_admin:
@@ -1181,37 +1161,29 @@ async def disable_users_bulk(
             status_code=403,
             content={
                 "success": False,
-                "error": "Access denied. Admin privileges required."
-            }
+                "error": "Access denied. Admin privileges required.",
+            },
         )
 
     # Get user IDs from request body
     body = await request.json()
-    user_ids = body.get('user_ids', [])
+    user_ids = body.get("user_ids", [])
 
     if not user_ids:
         return JSONResponse(
-            status_code=400,
-            content={
-                "success": False,
-                "error": "No users specified"
-            }
+            status_code=400, content={"success": False, "error": "No users specified"}
         )
 
     # Remove current user from list to prevent self-disable
     creator_user = auth.user
-    if creator_user and creator_user['id'] in user_ids:
-        user_ids.remove(creator_user['id'])
-        logger.warning(
-            f"Removed self ({creator_user['id']}) from bulk disable list")
+    if creator_user and creator_user["id"] in user_ids:
+        user_ids.remove(creator_user["id"])
+        logger.warning(f"Removed self ({creator_user['id']}) from bulk disable list")
 
     if not user_ids:
         return JSONResponse(
             status_code=400,
-            content={
-                "success": False,
-                "error": "No valid users to disable"
-            }
+            content={"success": False, "error": "No valid users to disable"},
         )
 
     # Bulk disable
@@ -1230,8 +1202,8 @@ async def disable_users_bulk(
             "disabled": len(results["success"]),
             "failed": len(results["failed"]),
             "already_disabled": len(results.get("already_disabled", [])),
-            "details": results
-        }
+            "details": results,
+        },
     )
 
 
@@ -1267,8 +1239,7 @@ Example Success Response:
     dependencies=[Depends(security)],
 )
 async def enable_users_bulk(
-    request: Request,
-    auth: AuthContext = Depends(get_auth_context)
+    request: Request, auth: AuthContext = Depends(get_auth_context)
 ):
     """Enable multiple users (admin only)"""
     if not auth.is_system_admin:
@@ -1276,21 +1247,17 @@ async def enable_users_bulk(
             status_code=403,
             content={
                 "success": False,
-                "error": "Access denied. Admin privileges required."
-            }
+                "error": "Access denied. Admin privileges required.",
+            },
         )
 
     # Get user IDs from request body
     body = await request.json()
-    user_ids = body.get('user_ids', [])
+    user_ids = body.get("user_ids", [])
 
     if not user_ids:
         return JSONResponse(
-            status_code=400,
-            content={
-                "success": False,
-                "error": "No users specified"
-            }
+            status_code=400, content={"success": False, "error": "No users specified"}
         )
 
     # Bulk enable
@@ -1309,8 +1276,8 @@ async def enable_users_bulk(
             "enabled": len(results["success"]),
             "failed": len(results["failed"]),
             "already_enabled": len(results.get("already_enabled", [])),
-            "details": results
-        }
+            "details": results,
+        },
     )
 
 
@@ -1342,28 +1309,31 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
     response_model=list[FileInfo],
-    responses={
-    },
+    responses={},
 )
-async def list_user_files(request: Request, auth: AuthContext = Depends(get_auth_context)):
+async def list_user_files(
+    request: Request, auth: AuthContext = Depends(get_auth_context)
+):
     """List files in user's directory"""
     try:
         creator_user = auth.user
 
         # Create user directory path
-        user_dir = STATIC_DIR / str(creator_user['id'])
+        user_dir = STATIC_DIR / str(creator_user["id"])
 
         # Create directory if it doesn't exist
         user_dir.mkdir(parents=True, exist_ok=True)
 
         # List files in user directory
         files = []
-        for file_path in user_dir.glob('*'):
+        for file_path in user_dir.glob("*"):
             if file_path.suffix.lower() in ALLOWED_EXTENSIONS:
-                files.append({
-                    'name': file_path.name,
-                    'path': str(file_path.relative_to(STATIC_DIR))
-                })
+                files.append(
+                    {
+                        "name": file_path.name,
+                        "path": str(file_path.relative_to(STATIC_DIR)),
+                    }
+                )
 
         return files
 
@@ -1396,13 +1366,12 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
     response_model=UploadFileResponse,
-    responses={
-    },
+    responses={},
 )
 async def upload_file(
     request: Request,
     file: UploadFile = File(...),
-    auth: AuthContext = Depends(get_auth_context)
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Upload a file to user's directory"""
     try:
@@ -1413,11 +1382,11 @@ async def upload_file(
         if file_extension not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid file type. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+                detail=f"Invalid file type. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}",
             )
 
         # Create user directory path
-        user_dir = STATIC_DIR / str(creator_user['id'])
+        user_dir = STATIC_DIR / str(creator_user["id"])
         user_dir.mkdir(parents=True, exist_ok=True)
 
         # Create file path and save file
@@ -1430,10 +1399,7 @@ async def upload_file(
         # Return the relative path for the file
         relative_path = str(file_path.relative_to(STATIC_DIR))
 
-        return {
-            "path": relative_path,
-            "name": file.filename
-        }
+        return {"path": relative_path, "name": file.filename}
 
     except HTTPException as he:
         raise he
@@ -1464,17 +1430,18 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
     response_model=DeleteFileResponse,
-    responses={
-    },
+    responses={},
 )
-async def delete_file(request: Request, path: str, auth: AuthContext = Depends(get_auth_context)):
+async def delete_file(
+    request: Request, path: str, auth: AuthContext = Depends(get_auth_context)
+):
     """Delete a file from the user's directory"""
     try:
         logger.debug(f"Received request to delete file: {path}")
         creator_user = auth.user
 
         # Create user directory path
-        user_dir = STATIC_DIR / str(creator_user['id'])
+        user_dir = STATIC_DIR / str(creator_user["id"])
 
         # Full file path
         file_path = user_dir / path
@@ -1492,8 +1459,7 @@ async def delete_file(request: Request, path: str, auth: AuthContext = Depends(g
     except HTTPException as he:
         raise he
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error deleting file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error deleting file: {str(e)}")
 
 
 # Update the QuestionRequest model
@@ -1537,21 +1503,19 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
     response_model=EmailRoleUpdateResponse,
-    responses={
-    },
+    responses={},
 )
 async def update_user_role_by_email(
     role_update: EmailRoleUpdate,
     request: Request,
-    auth: AuthContext = Depends(get_auth_context)
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Update a user's role (admin or user) directly using their email address.
     This endpoint provides a more direct way to update roles in the OWI system."""
     try:
         if not auth.is_system_admin:
             raise HTTPException(
-                status_code=403,
-                detail="Administrator privileges required"
+                status_code=403, detail="Administrator privileges required"
             )
 
         # Validation check for role
@@ -1559,7 +1523,7 @@ async def update_user_role_by_email(
         if new_role not in ["admin", "user"]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid role: {new_role}. Must be 'admin' or 'user'"
+                detail=f"Invalid role: {new_role}. Must be 'admin' or 'user'",
             )
 
         # LAMB primary: update role in Creator_users
@@ -1568,12 +1532,13 @@ async def update_user_role_by_email(
         if not lamb_result:
             raise HTTPException(
                 status_code=400,
-                detail=f"Failed to update user role in database. User may not exist."
+                detail="Failed to update user role in database. User may not exist.",
             )
 
         # OWI mirror (best-effort)
         try:
             from lamb.owi_bridge.owi_users import OwiUserManager
+
             user_manager = OwiUserManager()
             user_manager.update_user_role_by_email(role_update.email, new_role)
         except Exception as owi_err:
@@ -1582,17 +1547,14 @@ async def update_user_role_by_email(
         return {
             "success": True,
             "message": f"User role updated to {new_role}",
-            "data": {"email": role_update.email, "role": new_role}
+            "data": {"email": role_update.email, "role": new_role},
         }
 
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.put(
@@ -1623,41 +1585,34 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
     response_model=RoleUpdateResponse,
-    responses={
-    },
+    responses={},
 )
 async def update_user_role_admin(
-    user_id: str,
-    request: Request,
-    auth: AuthContext = Depends(get_auth_context)
+    user_id: str, request: Request, auth: AuthContext = Depends(get_auth_context)
 ):
     """Update a user's role (admin or user).
     Note: User ID 1 cannot have its role changed from admin."""
     try:
         # Enhanced logging for debugging
-        logger.info(
-            f"[ROLE_UPDATE] Attempting to update role for user ID {user_id}")
+        logger.info(f"[ROLE_UPDATE] Attempting to update role for user ID {user_id}")
 
         if not auth.is_system_admin:
             raise HTTPException(
-                status_code=403,
-                detail="Administrator privileges required"
+                status_code=403, detail="Administrator privileges required"
             )
 
         # Get the request body to extract the new role
         data = await request.json()
-        new_role = data.get('role')
+        new_role = data.get("role")
 
         if not new_role:
             raise HTTPException(
-                status_code=400,
-                detail="Role is required in request body"
+                status_code=400, detail="Role is required in request body"
             )
 
-        if new_role not in ['admin', 'user']:
+        if new_role not in ["admin", "user"]:
             raise HTTPException(
-                status_code=400,
-                detail="Role must be either 'admin' or 'user'"
+                status_code=400, detail="Role must be either 'admin' or 'user'"
             )
 
         # Call the OWI bridge API to update the user's role
@@ -1672,14 +1627,14 @@ async def update_user_role_admin(
             if str(user_id) == "1":
                 raise HTTPException(
                     status_code=403,
-                    detail="Cannot change role for primary admin user (ID 1)"
+                    detail="Cannot change role for primary admin user (ID 1)",
                 )
 
             # Validation check for role
             if new_role not in ["admin", "user"]:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid role: {new_role}. Must be 'admin' or 'user'"
+                    detail=f"Invalid role: {new_role}. Must be 'admin' or 'user'",
                 )
 
             # First, we need to get the user's email from the creator user database
@@ -1694,8 +1649,7 @@ async def update_user_role_admin(
                 conn = db_manager.get_connection()
                 if not conn:
                     raise HTTPException(
-                        status_code=500,
-                        detail="Failed to connect to database"
+                        status_code=500, detail="Failed to connect to database"
                     )
 
                 cursor = conn.cursor()
@@ -1713,37 +1667,34 @@ async def update_user_role_admin(
                     conn.close()
                     raise HTTPException(
                         status_code=404,
-                        detail=f"Creator user not found with ID: {user_id}"
+                        detail=f"Creator user not found with ID: {user_id}",
                     )
 
                 # Create a dictionary with the known column names since we used specific fields in SELECT
                 creator_user_info = {
-                    'id': user_record[0],
-                    'email': user_record[1],
-                    'name': user_record[2],
-                    'user_config': json.loads(user_record[3]) if user_record[3] else {}
+                    "id": user_record[0],
+                    "email": user_record[1],
+                    "name": user_record[2],
+                    "user_config": json.loads(user_record[3]) if user_record[3] else {},
                 }
 
                 conn.close()
             except Exception as db_error:
                 raise HTTPException(
-                    status_code=500,
-                    detail=f"Database error: {str(db_error)}"
+                    status_code=500, detail=f"Database error: {str(db_error)}"
                 )
 
             if not creator_user_info:
                 raise HTTPException(
-                    status_code=404,
-                    detail=f"Creator user not found with ID: {user_id}"
+                    status_code=404, detail=f"Creator user not found with ID: {user_id}"
                 )
 
             # Get the email from the creator user
-            user_email = creator_user_info.get('email')
+            user_email = creator_user_info.get("email")
 
             if not user_email:
                 raise HTTPException(
-                    status_code=400,
-                    detail="Creator user has no email address"
+                    status_code=400, detail="Creator user has no email address"
                 )
 
             # LAMB primary: update role in Creator_users
@@ -1753,39 +1704,42 @@ async def update_user_role_admin(
                 if not lamb_result:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Failed to update user role in database. User may not exist."
+                        detail="Failed to update user role in database. User may not exist.",
                     )
 
                 # OWI mirror (best-effort)
                 try:
                     from lamb.owi_bridge.owi_users import OwiUserManager
+
                     user_manager = OwiUserManager()
                     user_manager.update_user_role_by_email(user_email, new_role)
                 except Exception as owi_err:
-                    logger.warning(f"OWI role mirror failed for {user_email}: {owi_err}")
+                    logger.warning(
+                        f"OWI role mirror failed for {user_email}: {owi_err}"
+                    )
 
                 return {
                     "success": True,
                     "message": f"User role updated to {new_role}",
-                    "data": {"user_id": user_id, "role": new_role}
+                    "data": {"user_id": user_id, "role": new_role},
                 }
             except HTTPException:
                 raise
             except Exception as db_error:
                 import traceback
-                logger.error(
-                    f"[ROLE_UPDATE] Traceback: {traceback.format_exc()}")
+
+                logger.error(f"[ROLE_UPDATE] Traceback: {traceback.format_exc()}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Database error while updating user role: {str(db_error)}"
+                    detail=f"Database error while updating user role: {str(db_error)}",
                 )
 
     except HTTPException as he:
         raise he
     except Exception as e:
-        logger.error(
-            f"[ROLE_UPDATE] Error in update_user_role_admin: {str(e)}")
+        logger.error(f"[ROLE_UPDATE] Error in update_user_role_admin: {str(e)}")
         import traceback
+
         logger.error(f"[ROLE_UPDATE] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
@@ -1818,35 +1772,31 @@ Example Success Response:
 }
 ```
     """,
-    dependencies=[Depends(security)]
+    dependencies=[Depends(security)],
 )
 async def update_user_status_admin(
-    user_id: str,
-    request: Request,
-    auth: AuthContext = Depends(get_auth_context)
+    user_id: str, request: Request, auth: AuthContext = Depends(get_auth_context)
 ):
     """Enable or disable a user (admin only)"""
     try:
         if not auth.is_system_admin:
             raise HTTPException(
-                status_code=403,
-                detail="Administrator privileges required"
+                status_code=403, detail="Administrator privileges required"
             )
 
         # Get the request body to extract the enabled status
         data = await request.json()
-        enabled = data.get('enabled')
+        enabled = data.get("enabled")
 
         if enabled is None:
             raise HTTPException(
                 status_code=400,
-                detail="'enabled' field is required in request body (true/false)"
+                detail="'enabled' field is required in request body (true/false)",
             )
 
         if not isinstance(enabled, bool):
             raise HTTPException(
-                status_code=400,
-                detail="'enabled' field must be a boolean (true/false)"
+                status_code=400, detail="'enabled' field must be a boolean (true/false)"
             )
 
         # Get the user from LAMB database to get their email
@@ -1855,38 +1805,39 @@ async def update_user_status_admin(
 
         if not user:
             raise HTTPException(
-                status_code=404,
-                detail=f"User with ID {user_id} not found"
+                status_code=404, detail=f"User with ID {user_id} not found"
             )
 
         # Prevent users from disabling themselves
         current_user = auth.user
-        if current_user and current_user.get('email') == user.get('user_email') and not enabled:
+        if (
+            current_user
+            and current_user.get("email") == user.get("user_email")
+            and not enabled
+        ):
             raise HTTPException(
                 status_code=403,
-                detail="You cannot disable your own account. Please ask another administrator to disable your account if needed."
+                detail="You cannot disable your own account. Please ask another administrator to disable your account if needed.",
             )
 
         # Update user status in OWI auth system
         owi_manager = OwiUserManager()
-        if not owi_manager.update_user_status(user.get('user_email'), enabled):
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to update user status"
-            )
+        if not owi_manager.update_user_status(user.get("user_email"), enabled):
+            raise HTTPException(status_code=500, detail="Failed to update user status")
 
         status_text = "enabled" if enabled else "disabled"
         logger.info(
-            f"Admin updated user {user.get('user_email')} (ID: {user_id}) status to {status_text}")
+            f"Admin updated user {user.get('user_email')} (ID: {user_id}) status to {status_text}"
+        )
 
         return {
             "success": True,
             "message": f"User has been {status_text}",
             "data": {
                 "user_id": user_id,
-                "email": user.get('user_email'),
-                "enabled": enabled
-            }
+                "email": user.get("user_email"),
+                "enabled": enabled,
+            },
         }
 
     except HTTPException:
@@ -1937,27 +1888,23 @@ Example Error (User has dependencies):
 }
 ```
     """,
-    dependencies=[Depends(security)]
+    dependencies=[Depends(security)],
 )
 async def delete_user_admin(
-    user_id: str,
-    request: Request,
-    auth: AuthContext = Depends(get_auth_context)
+    user_id: str, request: Request, auth: AuthContext = Depends(get_auth_context)
 ):
     """Delete a disabled user with no dependencies (admin only)"""
     try:
         if not auth.is_system_admin:
             raise HTTPException(
-                status_code=403,
-                detail="Administrator privileges required"
+                status_code=403, detail="Administrator privileges required"
             )
 
         # Prevent users from deleting themselves
         current_user = auth.user
-        if current_user and str(current_user.get('id')) == user_id:
+        if current_user and str(current_user.get("id")) == user_id:
             raise HTTPException(
-                status_code=403,
-                detail="You cannot delete your own account"
+                status_code=403, detail="You cannot delete your own account"
             )
 
         # Attempt safe deletion
@@ -1966,8 +1913,7 @@ async def delete_user_admin(
 
         if not success:
             raise HTTPException(
-                status_code=400,
-                detail=error_message or "Failed to delete user"
+                status_code=400, detail=error_message or "Failed to delete user"
             )
 
         logger.info(f"Admin successfully deleted user ID: {user_id}")
@@ -1975,9 +1921,7 @@ async def delete_user_admin(
         return {
             "success": True,
             "message": "User deleted successfully",
-            "data": {
-                "user_id": user_id
-            }
+            "data": {"user_id": user_id},
         }
 
     except HTTPException:
@@ -2029,19 +1973,16 @@ Example Response (User has no dependencies):
 }
 ```
     """,
-    dependencies=[Depends(security)]
+    dependencies=[Depends(security)],
 )
 async def check_user_dependencies_admin(
-    user_id: str,
-    request: Request,
-    auth: AuthContext = Depends(get_auth_context)
+    user_id: str, request: Request, auth: AuthContext = Depends(get_auth_context)
 ):
     """Check if a user has any dependencies (admin only)"""
     try:
         if not auth.is_system_admin:
             raise HTTPException(
-                status_code=403,
-                detail="Administrator privileges required"
+                status_code=403, detail="Administrator privileges required"
             )
 
         # Check dependencies
@@ -2080,10 +2021,11 @@ Example Success Response:
     """,
     dependencies=[Depends(security)],
     response_model=CurrentUserResponse,
-    responses={
-    },
+    responses={},
 )
-async def get_current_user(request: Request, auth: AuthContext = Depends(get_auth_context)):
+async def get_current_user(
+    request: Request, auth: AuthContext = Depends(get_auth_context)
+):
     """Get current user information from authentication token"""
     try:
         creator_user = auth.user
@@ -2092,7 +2034,7 @@ async def get_current_user(request: Request, auth: AuthContext = Depends(get_aut
         return {
             "id": creator_user["id"],
             "email": creator_user["email"],
-            "name": creator_user["name"]
+            "name": creator_user["name"],
         }
 
     except HTTPException as he:
@@ -2122,10 +2064,12 @@ curl -X GET 'http://localhost:9099/creator/user/profile' \\
     responses={
         200: {"description": "User profile retrieved successfully"},
         401: {"description": "Authentication required"},
-        500: {"description": "Internal server error"}
-    }
+        500: {"description": "Internal server error"},
+    },
 )
-async def get_own_profile(request: Request, auth: AuthContext = Depends(get_auth_context)):
+async def get_own_profile(
+    request: Request, auth: AuthContext = Depends(get_auth_context)
+):
     """Get comprehensive profile for the currently authenticated user."""
     try:
         creator_user = auth.user
@@ -2173,9 +2117,18 @@ Example Success Response:
     dependencies=[Depends(security)],
     response_model=NewsResponse,
     responses={
-        200: {"model": NewsResponse, "description": "News content retrieved successfully"},
-        404: {"model": ErrorResponse, "description": "News file not found for specified language"},
-        500: {"model": ErrorResponse, "description": "Server error while fetching news"},
+        200: {
+            "model": NewsResponse,
+            "description": "News content retrieved successfully",
+        },
+        404: {
+            "model": ErrorResponse,
+            "description": "News file not found for specified language",
+        },
+        500: {
+            "model": ErrorResponse,
+            "description": "Server error while fetching news",
+        },
     },
 )
 async def get_news(lang: str, background_tasks: BackgroundTasks):
@@ -2185,7 +2138,7 @@ async def get_news(lang: str, background_tasks: BackgroundTasks):
         if not lang or not lang.isalnum() or len(lang) > 10:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid language code. Must be alphanumeric and max 10 characters."
+                detail="Invalid language code. Must be alphanumeric and max 10 characters.",
             )
 
         # Check if we have fresh cached content
@@ -2193,52 +2146,42 @@ async def get_news(lang: str, background_tasks: BackgroundTasks):
             cached_content = read_from_cache(lang)
             if cached_content is not None:
                 logger.info(
-                    f"Serving fresh cached news for language '{lang}' (age: {get_cache_age(lang):.0f}s)")
-                return {
-                    "success": True,
-                    "content": cached_content,
-                    "lang": lang
-                }
+                    f"Serving fresh cached news for language '{lang}' (age: {get_cache_age(lang):.0f}s)"
+                )
+                return {"success": True, "content": cached_content, "lang": lang}
 
         # Cache is stale or doesn't exist - try to fetch from origin immediately
         logger.info(
-            f"Cache is stale or missing for language '{lang}', fetching from origin")
+            f"Cache is stale or missing for language '{lang}', fetching from origin"
+        )
         fresh_content = await fetch_and_cache_news(lang)
 
         if fresh_content is not None:
             # Successfully fetched fresh content
-            return {
-                "success": True,
-                "content": fresh_content,
-                "lang": lang
-            }
+            return {"success": True, "content": fresh_content, "lang": lang}
 
         # Failed to fetch from origin, try to use stale cache
         cached_content = read_from_cache(lang)
         if cached_content is not None:
             cache_age = get_cache_age(lang)
             logger.info(
-                f"Using stale cached news for language '{lang}' (age: {cache_age:.0f}s)")
-            return {
-                "success": True,
-                "content": cached_content,
-                "lang": lang
-            }
+                f"Using stale cached news for language '{lang}' (age: {cache_age:.0f}s)"
+            )
+            return {"success": True, "content": cached_content, "lang": lang}
 
         # No cache and origin failed
         raise HTTPException(
             status_code=404,
-            detail=f"News content not found for language '{lang}' and no cached version available."
+            detail=f"News content not found for language '{lang}' and no cached version available.",
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            f"Unexpected error fetching news for language '{lang}': {str(e)}")
+        logger.error(f"Unexpected error fetching news for language '{lang}': {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Internal server error while fetching news: {str(e)}"
+            detail=f"Internal server error while fetching news: {str(e)}",
         )
 
 
@@ -2274,43 +2217,41 @@ Example Success Response:
     dependencies=[Depends(security)],
     responses={
         401: {"description": "Invalid authentication"},
-        500: {"description": "Internal server error"}
-    }
+        500: {"description": "Internal server error"},
+    },
 )
-async def get_shared_assistants(request: Request, auth: AuthContext = Depends(get_auth_context)):
+async def get_shared_assistants(
+    request: Request, auth: AuthContext = Depends(get_auth_context)
+):
     """
     Get list of assistants shared with the current user.
     """
     try:
         creator_user = auth.user
 
-        user_id = creator_user.get('id')
-        user_email = creator_user.get('email')
-        logger.info(
-            f"User {user_email} (ID: {user_id}) requesting shared assistants")
+        user_id = creator_user.get("id")
+        user_email = creator_user.get("email")
+        logger.info(f"User {user_email} (ID: {user_id}) requesting shared assistants")
 
         # Use the assistant sharing service
         from lamb.services.assistant_sharing_service import AssistantSharingService
+
         sharing_service = AssistantSharingService()
 
         # Get shared assistants
         shared_assistants = sharing_service.get_shared_assistants(user_id)
 
         logger.info(
-            f"Found {len(shared_assistants)} assistants shared with user {user_email}")
+            f"Found {len(shared_assistants)} assistants shared with user {user_email}"
+        )
 
-        return {
-            "assistants": shared_assistants
-        }
+        return {"assistants": shared_assistants}
 
     except HTTPException as he:
         raise he
     except Exception as e:
         logger.error(f"Error getting shared assistants: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.get(
@@ -2349,24 +2290,31 @@ Example Response (cannot share):
     response_model=SharingPermissionResponse,
     responses={
         401: {"description": "Invalid authentication"},
-        500: {"description": "Internal server error"}
-    }
+        500: {"description": "Internal server error"},
+    },
 )
-async def check_sharing_permission_endpoint(request: Request, auth: AuthContext = Depends(get_auth_context)):
+async def check_sharing_permission_endpoint(
+    request: Request, auth: AuthContext = Depends(get_auth_context)
+):
     """Check if sharing is enabled for current user's organization"""
     try:
         creator_user = auth.user
 
-        user_id = creator_user.get('id')
-        user_email = creator_user.get('email')
+        user_id = creator_user.get("id")
+        user_email = creator_user.get("email")
         logger.info(f"User {user_email} checking sharing permission")
 
         from lamb.services.assistant_sharing_service import AssistantSharingService
+
         sharing_service = AssistantSharingService()
 
         can_share = sharing_service.check_sharing_permission(user_id)
 
-        message = "User has sharing permission" if can_share else "Sharing is disabled for your organization or user"
+        message = (
+            "User has sharing permission"
+            if can_share
+            else "Sharing is disabled for your organization or user"
+        )
         logger.info(f"User {user_email} sharing permission: {can_share}")
 
         return SharingPermissionResponse(can_share=can_share, message=message)
@@ -2375,10 +2323,7 @@ async def check_sharing_permission_endpoint(request: Request, auth: AuthContext 
         raise he
     except Exception as e:
         logger.error(f"Error checking sharing permission: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.get(
@@ -2407,26 +2352,28 @@ Example Response:
     responses={
         401: {"description": "Invalid authentication"},
         403: {"description": "Sharing not enabled for organization"},
-        500: {"description": "Internal server error"}
-    }
+        500: {"description": "Internal server error"},
+    },
 )
-async def get_organization_users_endpoint(request: Request, auth: AuthContext = Depends(get_auth_context)):
+async def get_organization_users_endpoint(
+    request: Request, auth: AuthContext = Depends(get_auth_context)
+):
     """Get list of users in current user's organization for sharing UI"""
     try:
         creator_user = auth.user
 
-        user_id = creator_user.get('id')
-        user_email = creator_user.get('email')
+        user_id = creator_user.get("id")
+        user_email = creator_user.get("email")
         logger.info(f"User {user_email} requesting organization users for sharing")
 
         from lamb.services.assistant_sharing_service import AssistantSharingService
+
         sharing_service = AssistantSharingService()
 
         # Check if sharing is enabled
         if not sharing_service.check_sharing_permission(user_id):
             raise HTTPException(
-                status_code=403,
-                detail="Sharing is not enabled for your organization"
+                status_code=403, detail="Sharing is not enabled for your organization"
             )
 
         users = sharing_service.get_organization_users(user_id)
@@ -2441,10 +2388,7 @@ async def get_organization_users_endpoint(request: Request, auth: AuthContext = 
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting organization users: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.get(
@@ -2478,15 +2422,17 @@ Example Response:
         401: {"description": "Invalid authentication"},
         403: {"description": "Only owner or org admin can view shares"},
         404: {"description": "Assistant not found"},
-        500: {"description": "Internal server error"}
-    }
+        500: {"description": "Internal server error"},
+    },
 )
-async def get_assistant_shares_endpoint(request: Request, assistant_id: int, auth: AuthContext = Depends(get_auth_context)):
+async def get_assistant_shares_endpoint(
+    request: Request, assistant_id: int, auth: AuthContext = Depends(get_auth_context)
+):
     """Get list of users an assistant is shared with"""
     try:
         creator_user = auth.user
-        user_id = creator_user.get('id')
-        user_email = creator_user.get('email')
+        user_id = creator_user.get("id")
+        user_email = creator_user.get("email")
         logger.info(f"User {user_email} requesting shares for assistant {assistant_id}")
 
         # Get assistant to check ownership
@@ -2497,13 +2443,16 @@ async def get_assistant_shares_endpoint(request: Request, assistant_id: int, aut
         # Check authorization: owner, system admin, or org admin
         is_owner = assistant.owner == user_email
         if not is_owner and not auth.is_system_admin and not auth.is_org_admin:
-            logger.warning(f"User {user_email} denied access to shares for assistant {assistant_id}")
+            logger.warning(
+                f"User {user_email} denied access to shares for assistant {assistant_id}"
+            )
             raise HTTPException(
                 status_code=403,
-                detail="Only the assistant owner, system admin, or organization admin can view sharing settings"
+                detail="Only the assistant owner, system admin, or organization admin can view sharing settings",
             )
 
         from lamb.services.assistant_sharing_service import AssistantSharingService
+
         sharing_service = AssistantSharingService()
 
         shares = sharing_service.get_assistant_shares(assistant_id)
@@ -2518,10 +2467,7 @@ async def get_assistant_shares_endpoint(request: Request, assistant_id: int, aut
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting assistant shares: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.put(
@@ -2564,22 +2510,24 @@ Example Response:
     response_model=List[ShareUserResponse],
     responses={
         401: {"description": "Invalid authentication"},
-        403: {"description": "Only owner or org admin can manage shares / Sharing not enabled"},
+        403: {
+            "description": "Only owner or org admin can manage shares / Sharing not enabled"
+        },
         404: {"description": "Assistant not found"},
-        500: {"description": "Internal server error"}
-    }
+        500: {"description": "Internal server error"},
+    },
 )
 async def update_assistant_shares_endpoint(
-    request: Request, 
-    assistant_id: int, 
+    request: Request,
+    assistant_id: int,
     shares_request: UpdateSharesRequest,
-    auth: AuthContext = Depends(get_auth_context)
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Update the list of users an assistant is shared with"""
     try:
         creator_user = auth.user
-        user_id = creator_user.get('id')
-        user_email = creator_user.get('email')
+        user_id = creator_user.get("id")
+        user_email = creator_user.get("email")
         logger.info(f"User {user_email} updating shares for assistant {assistant_id}")
 
         # Get assistant to check ownership
@@ -2590,30 +2538,36 @@ async def update_assistant_shares_endpoint(
         # Check authorization: owner, system admin, or org admin
         is_owner = assistant.owner == user_email
         if not is_owner and not auth.is_system_admin and not auth.is_org_admin:
-            logger.warning(f"User {user_email} denied update shares for assistant {assistant_id}")
+            logger.warning(
+                f"User {user_email} denied update shares for assistant {assistant_id}"
+            )
             raise HTTPException(
                 status_code=403,
-                detail="Only the assistant owner, system admin, or organization admin can manage sharing"
+                detail="Only the assistant owner, system admin, or organization admin can manage sharing",
             )
 
         from lamb.services.assistant_sharing_service import AssistantSharingService
+
         sharing_service = AssistantSharingService()
 
         # Check if sharing is enabled (when adding shares)
-        if len(shares_request.user_emails) > 0 and not sharing_service.check_sharing_permission(user_id):
+        if len(
+            shares_request.user_emails
+        ) > 0 and not sharing_service.check_sharing_permission(user_id):
             raise HTTPException(
-                status_code=403,
-                detail="Sharing is not enabled for your organization"
+                status_code=403, detail="Sharing is not enabled for your organization"
             )
 
         # Update shares using emails
         updated_shares = sharing_service.update_assistant_shares_by_email(
             assistant_id=assistant_id,
             user_emails=shares_request.user_emails,
-            current_user_id=user_id
+            current_user_id=user_id,
         )
 
-        logger.info(f"Updated shares for assistant {assistant_id}: now shared with {len(updated_shares)} users")
+        logger.info(
+            f"Updated shares for assistant {assistant_id}: now shared with {len(updated_shares)} users"
+        )
 
         return updated_shares
 
@@ -2627,7 +2581,4 @@ async def update_assistant_shares_endpoint(
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating assistant shares: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
