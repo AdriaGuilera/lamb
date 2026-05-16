@@ -24,6 +24,7 @@ from lamb.database_manager import LambDatabaseManager
 from lamb.owi_bridge.owi_users import OwiUserManager
 from .assistant_router import router as assistant_router
 from .knowledges_router import router as knowledges_router
+from .kg_rag_proxy_router import router as kg_rag_proxy_router
 from lamb.auth_context import AuthContext, get_auth_context, require_admin
 import json
 import shutil
@@ -114,6 +115,9 @@ router.include_router(assistant_router, prefix="/assistant")
 
 # Include the knowledges router
 router.include_router(knowledges_router, prefix="/knowledgebases")
+
+# Include Graph RAG KB proxy routes used by the knowledge-base detail UI
+router.include_router(kg_rag_proxy_router)
 
 # Include the organization management router
 router.include_router(organization_router, prefix="/admin")

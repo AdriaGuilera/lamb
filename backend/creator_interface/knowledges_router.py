@@ -45,11 +45,15 @@ class KnowledgeBaseDetailsResponse(BaseModel):
     name: str
     description: Optional[str]
     files: Optional[List[Dict]] = [] # Or use a more specific File model if defined
+    owner: Optional[str] = None
+    created_at: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
     # LAMB-specific metadata fields
     is_owner: Optional[bool] = None
     can_modify: Optional[bool] = None
     is_shared: Optional[bool] = None
     shared_by: Optional[str] = None
+    graph_enabled: Optional[bool] = None
 
 class KnowledgeBaseUpdateResponse(BaseModel):
     # Assuming the response from kb_server_manager.update_knowledge_base

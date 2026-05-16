@@ -193,6 +193,29 @@ def run_migrations() -> Dict[str, Any]:
     if "file_registry" not in inspector.get_table_names():
         return migration_results  # Table will be created by create_all()
 
+    table_names = inspector.get_table_names()
+
+    if "collections" in table_names:
+        collection_columns = {col["name"] for col in inspector.get_columns("collections")}
+        if "graph_enabled" not in collection_columns:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(
+                        "ALTER TABLE collections ADD COLUMN graph_enabled BOOLEAN DEFAULT 0 NOT NULL"
+                    ))
+                    conn.commit()
+                migration_results["migrations_run"].append({
+                    "migration": "add_collection_graph_enabled_column",
+                    "table": "collections",
+                    "status": "success",
+                    "description": "Added per-collection Graph RAG opt-in flag"
+                })
+                print("INFO: [migration] Added graph_enabled column to collections table")
+            except Exception as e:
+                error_msg = f"Failed to add graph_enabled column: {str(e)}"
+                migration_results["errors"].append(error_msg)
+                print(f"ERROR: [migration] {error_msg}")
+
     # Get existing columns in file_registry
     existing_columns = {col["name"]
                         for col in inspector.get_columns("file_registry")}

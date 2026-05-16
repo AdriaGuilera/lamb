@@ -176,6 +176,7 @@ export async function getKnowledgeBases() {
  * @property {string} name - The name of the knowledge base
  * @property {string} [description] - Optional description of the knowledge base
  * @property {string} access_control - Access control setting ('private' or 'public')
+ * @property {boolean} [graph_enabled] - Whether the knowledge base should index content into Graph RAG
  * 
  * @typedef {Object} KnowledgeBaseCreateResponse
  * @property {string} kb_id - The ID of the newly created knowledge base

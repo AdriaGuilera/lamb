@@ -508,6 +508,7 @@ class KBServerManager:
                 "description": description,
                 "owner": str(creator_user.get('id')),  # Use ID instead of email for privacy (as string)
                 "visibility": kb_data.access_control or "private",
+                "graph_enabled": bool(getattr(kb_data, "graph_enabled", False)),
                 "embeddings_model": {
                     "model": "default",
                     "vendor": "default",
@@ -705,8 +706,10 @@ class KBServerManager:
                         "files": files,
                         "metadata": {
                             "description": collection_data.get('description', ''),
-                            "access_control": collection_data.get('visibility', 'private')
+                            "access_control": collection_data.get('visibility', 'private'),
+                            "graph_enabled": bool(collection_data.get('graph_enabled', False))
                         },
+                        "graph_enabled": bool(collection_data.get('graph_enabled', False)),
                         "owner": collection_data.get('owner', ''),
                         "created_at": collection_data.get('created_at', int(time.time()))
                     }

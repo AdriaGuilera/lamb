@@ -107,6 +107,7 @@ class CollectionsService:
                 "visibility": collection.visibility.value if hasattr(collection.visibility, 'value') else str(collection.visibility),
                 "owner": collection.owner,
                 "creation_date": collection.creation_date,
+                "graph_enabled": bool(getattr(collection, "graph_enabled", False)),
                 "embeddings_model": CollectionsService._sanitize_embeddings_model(collection.embeddings_model)
             }
         elif isinstance(collection, dict):
@@ -436,7 +437,8 @@ class CollectionsService:
                 owner=collection.owner,
                 description=collection.description,
                 visibility=visibility,
-                embeddings_model=embeddings_model
+                embeddings_model=embeddings_model,
+                graph_enabled=bool(collection.graph_enabled)
             )
             
             # Ensure embeddings_model is a dictionary before returning

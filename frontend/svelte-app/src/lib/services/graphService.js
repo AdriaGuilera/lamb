@@ -26,6 +26,19 @@ export function getGraphSnapshot(collectionId, filters = {}) {
 	return apiJson(`/graph/collections/${collectionId}/snapshot${buildQuery(filters)}`);
 }
 
+export function getGraphStatus() {
+	return apiJson('/graph/status');
+}
+
+/**
+ * @param {string | number} collectionId
+ */
+export function migrateCollectionGraph(collectionId) {
+	return apiJson(`/graph/collections/${collectionId}/migrate`, {
+		method: 'POST'
+	});
+}
+
 /**
  * @param {string | number} collectionId
  * @param {QueryParams} filters

@@ -236,6 +236,21 @@ class GraphStoreCoverageSession:
                     },
                 ]
             )
+        if (
+            "RETURN doc.document_id AS document_id," in compact_query
+            and "chunk_count AS chunk_count" in compact_query
+        ):
+            return FakeResult(
+                rows=[
+                    {
+                        "document_id": "doc-1",
+                        "filename": "kg.md",
+                        "file_id": 2,
+                        "chunk_count": 1,
+                        "concepts": ["knowledge graph", "neo4j"],
+                    }
+                ]
+            )
         if "RETURN source.name AS source" in compact_query:
             return FakeResult(
                 rows=[
@@ -1079,8 +1094,8 @@ def test_graph_store_read_methods_and_collection_graph(monkeypatch):
         include_chunks=True,
         limit=500,
     )
-    assert graph["counts"] == {"concepts": 2, "chunks": 1, "edges": 3}
-    assert {node["type"] for node in graph["nodes"]} == {"concept", "chunk"}
+    assert graph["counts"] == {"concepts": 2, "documents": 1, "chunks": 1, "edges": 4}
+    assert {node["type"] for node in graph["nodes"]} == {"concept", "document", "chunk"}
 
     graph_without_chunks = graph_store.get_collection_graph(
         5,
@@ -1095,7 +1110,7 @@ def test_graph_store_read_methods_and_collection_graph(monkeypatch):
     assert graph_store.get_change(5, "org-1", "missing") is None
     assert graph_store.delete_collection(5) is None
     empty_graph = graph_store.get_collection_graph(5, "org-1")
-    assert empty_graph["counts"] == {"concepts": 0, "chunks": 0, "edges": 0}
+    assert empty_graph["counts"] == {"concepts": 0, "documents": 0, "chunks": 0, "edges": 0}
 
 
 def test_graph_store_collection_graph_no_concepts(monkeypatch):
@@ -1137,7 +1152,7 @@ def test_graph_store_collection_graph_skips_chunk_rows_without_ids(monkeypatch):
 
     graph = graph_store.get_collection_graph(5, "org-1", include_chunks=True)
     assert graph["counts"]["chunks"] == 1
-    assert all(node["type"] == "concept" for node in graph["nodes"])
+    assert all(node["type"] != "chunk" for node in graph["nodes"])
 
 
 def test_graph_store_curation_wrappers_and_transactions(monkeypatch):
@@ -1622,6 +1637,7 @@ def test_ingestion_hook_indexes_extracted_concepts_with_mocked_graph(monkeypatch
         "owner": "org-1",
         "description": "KG test",
         "embeddings_model": {"vendor": "default", "model": "default"},
+        "graph_enabled": True,
     }
     ingestion_module = _import_ingestion_service_with_stubs(
         monkeypatch,
@@ -1686,6 +1702,39 @@ def test_ingestion_hook_indexes_extracted_concepts_with_mocked_graph(monkeypatch
     assert captured["graph_kwargs"]["filename"] == "kg.md"
     assert captured["graph_kwargs"]["concepts_by_chunk"] == {
         "chroma-id-1": ["knowledge graph"]
+    }
+
+
+def test_ingestion_hook_skips_when_collection_graph_disabled(monkeypatch):
+    collection = {
+        "id": 11,
+        "name": "vector-only-kb",
+        "owner": "org-1",
+        "description": "Vector only",
+        "embeddings_model": {"vendor": "default", "model": "default"},
+        "graph_enabled": False,
+    }
+    ingestion_module = _import_ingestion_service_with_stubs(
+        monkeypatch,
+        collection=collection,
+    )
+    monkeypatch.setattr(
+        "config.get_kg_rag_config",
+        lambda: {"enabled": True, "index_on_ingest": True},
+    )
+
+    result = ingestion_module.IngestionService._index_documents_for_kg_rag(
+        db=object(),
+        db_collection=collection,
+        ids=["chroma-id-1"],
+        texts=["Knowledge graphs improve multi-hop retrieval."],
+        metadatas=[{"filename": "kg.md", "parent_text": "Parent context"}],
+    )
+
+    assert result == {
+        "enabled": True,
+        "indexed": False,
+        "reason": "collection_graph_disabled",
     }
 
 
@@ -1902,7 +1951,7 @@ def test_collection_graph_unconfigured_returns_empty_snapshot():
     assert snapshot["nodes"] == []
     assert snapshot["edges"] == []
     assert snapshot["filters"]["concept"] == "Knowledge Graph"
-    assert snapshot["counts"] == {"concepts": 0, "chunks": 0, "edges": 0}
+    assert snapshot["counts"] == {"concepts": 0, "documents": 0, "chunks": 0, "edges": 0}
 
 
 def test_benchmark_scores_precision_recall_mrr_by_filename():

@@ -24,6 +24,7 @@ class CollectionService:
         description: Optional[str] = None,
         visibility: Visibility = Visibility.PRIVATE,
         embeddings_model: Optional[Dict[str, Any]] = None,
+        graph_enabled: bool = False,
     ) -> Collection:
         """Create a new collection in both SQLite and ChromaDB.
 
@@ -34,6 +35,7 @@ class CollectionService:
             description: Optional description
             visibility: Visibility setting (private or public)
             embeddings_model: Optional custom embeddings model configuration
+            graph_enabled: Whether Graph RAG indexing is enabled for this collection
 
         Returns:
             The created Collection object
@@ -89,6 +91,7 @@ class CollectionService:
                 visibility=visibility,
                 embeddings_model=embeddings_model,  # SQLAlchemy JSON column handles serialization
                 chromadb_uuid=str(chroma_collection.id),
+                graph_enabled=graph_enabled,
             )
             db.add(db_collection)
             db.commit()
@@ -199,6 +202,7 @@ class CollectionService:
         vendor: Optional[str] = None,
         endpoint: Optional[str] = None,
         apikey: Optional[str] = None,
+        graph_enabled: Optional[bool] = None,
     ) -> Optional[Collection]:
         """
         Update a collection's SQLite record and rename ChromaDB collection if needed.
@@ -235,6 +239,8 @@ class CollectionService:
             db_collection.description = description
         if visibility is not None:
             db_collection.visibility = visibility
+        if graph_enabled is not None:
+            db_collection.graph_enabled = graph_enabled
 
         # Only update endpoint and apikey
         if endpoint is not None:

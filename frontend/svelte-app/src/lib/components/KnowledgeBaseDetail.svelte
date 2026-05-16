@@ -9,6 +9,7 @@
     import ConfirmationModal from '$lib/components/modals/ConfirmationModal.svelte';
     import KnowledgeBaseGraphView from '$lib/components/KnowledgeBaseGraphView.svelte';
     import KnowledgeBaseBenchmarkView from '$lib/components/KnowledgeBaseBenchmarkView.svelte';
+    import { getGraphStatus, migrateCollectionGraph } from '$lib/services/graphService';
     
     /** 
      * @typedef {import('$lib/services/knowledgeBaseService').IngestionPlugin} IngestionPlugin
@@ -144,6 +145,22 @@
     let loading = $state(true);
     let error = $state('');
     let serverOffline = $state(false);
+    let graphStatus = $state({ enabled: false });
+    /** @type {{ chunks_seen?: number, chunks?: number } | null} */
+    let graphMigrationResult = $state(/** @type {{ chunks_seen?: number, chunks?: number } | null} */ (null));
+    let graphMigrationError = $state('');
+    let migratingGraph = $state(false);
+
+    let graphFeatureAvailable = $derived(Boolean(graphStatus.enabled));
+    let kbGraphEnabled = $derived.by(() => {
+        const currentKb = /** @type {any} */ (kb);
+        return Boolean(currentKb?.graph_enabled || currentKb?.metadata?.graph_enabled);
+    });
+    let graphToolsAvailable = $derived(graphFeatureAvailable && kbGraphEnabled);
+    let graphMigrationChunksProcessed = $derived.by(() => {
+        const result = graphMigrationResult;
+        return result ? (result.chunks_seen ?? result.chunks ?? 0) : 0;
+    });
 
     // Ingestion state
     /** @type {'files' | 'ingest' | 'query' | 'graph' | 'benchmarks'} */
@@ -268,6 +285,8 @@
         }).catch(err => {
             console.error('Failed to fetch ingestion config, using default:', err);
         });
+
+        loadGraphStatus();
         
         return () => {
             console.log('KnowledgeBaseDetail unmounted');
@@ -293,6 +312,12 @@
             if (kbId !== previousKbId) {
                  previousKbId = kbId;
             }
+        }
+    });
+
+    $effect(() => {
+        if (kb && (activeTab === 'graph' || activeTab === 'benchmarks') && !graphToolsAvailable) {
+            activeTab = 'files';
         }
     });
     
@@ -348,6 +373,10 @@
             activeTab = 'files'; // Redirect to files tab
             return;
         }
+        if ((tabName === 'graph' || tabName === 'benchmarks') && !graphToolsAvailable) {
+            activeTab = 'files';
+            return;
+        }
         activeTab = tabName;
         if (tabName === 'ingest' && plugins.length === 0 && !loadingPlugins) {
             console.log('Ingest tab selected, fetching plugins.');
@@ -373,6 +402,35 @@
         const fileInput = document.querySelector('#file-upload-input-inline');
         if (fileInput) {
             fileInput.value = '';
+        }
+    }
+
+    async function loadGraphStatus() {
+        try {
+            graphStatus = await getGraphStatus();
+        } catch (err) {
+            console.warn('Graph RAG status unavailable:', err);
+            graphStatus = { enabled: false };
+        }
+    }
+
+    async function handleMigrateToGraph() {
+        if (!kbId || migratingGraph) return;
+
+        migratingGraph = true;
+        graphMigrationError = '';
+        graphMigrationResult = null;
+
+        try {
+            graphMigrationResult = await migrateCollectionGraph(kbId);
+            await loadKnowledgeBase(kbId);
+            await loadGraphStatus();
+            activeTab = 'graph';
+        } catch (err) {
+            console.error('Graph RAG migration failed:', err);
+            graphMigrationError = err instanceof Error ? err.message : 'Graph RAG migration failed';
+        } finally {
+            migratingGraph = false;
         }
     }
     
@@ -1121,6 +1179,36 @@
                         </dd>
                     </div>
                     {/if}
+
+                    {#if graphFeatureAvailable}
+                    <div class="bg-gray-50 px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                        <dt class="text-sm font-medium text-gray-500">
+                            Graph RAG
+                        </dt>
+                        <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                            <div class="flex flex-wrap items-center gap-3">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full {kbGraphEnabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                                    {kbGraphEnabled ? 'Enabled' : 'Disabled'}
+                                </span>
+                                {#if !kbGraphEnabled && kb.can_modify === true}
+                                    <button
+                                        type="button"
+                                        onclick={handleMigrateToGraph}
+                                        disabled={migratingGraph}
+                                        class="inline-flex items-center px-3 py-1.5 border border-transparent rounded-md text-xs font-medium text-white bg-brand hover:bg-brand-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {migratingGraph ? 'Migrating...' : 'Migrate to Graph RAG'}
+                                    </button>
+                                {/if}
+                            </div>
+                            {#if graphMigrationError}
+                                <p class="mt-2 text-sm text-red-600">{graphMigrationError}</p>
+                            {:else if graphMigrationResult}
+                                <p class="mt-2 text-sm text-green-700">Migration completed. {graphMigrationChunksProcessed} chunks processed.</p>
+                            {/if}
+                        </dd>
+                    </div>
+                    {/if}
                 </dl>
             </div>
             
@@ -1163,6 +1251,7 @@
                             {$_('knowledgeBases.detail.tabs.query', { default: 'Query' })}
                         </button>
 
+                        {#if graphToolsAvailable}
                         <!-- Benchmarks Tab -->
                         <button
                             type="button"
@@ -1184,6 +1273,7 @@
                         >
                             Graph
                         </button>
+                        {/if}
                     </nav>
                 </div>
 
@@ -1743,12 +1833,12 @@
                     {/if}
 
                     <!-- Benchmarks Tab Content -->
-                    {#if activeTab === 'benchmarks'}
+                    {#if activeTab === 'benchmarks' && graphToolsAvailable}
                         <KnowledgeBaseBenchmarkView kbId={kbId} />
                     {/if}
 
                     <!-- Graph Tab Content -->
-                    {#if activeTab === 'graph'}
+                    {#if activeTab === 'graph' && graphToolsAvailable}
                         <KnowledgeBaseGraphView kbId={kbId} canModify={kb.can_modify === true} />
                     {/if}
                 </div>

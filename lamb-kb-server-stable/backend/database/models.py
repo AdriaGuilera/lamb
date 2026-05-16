@@ -9,7 +9,7 @@ import json
 from enum import Enum
 from typing import Optional, Dict, Any
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, ForeignKey, Enum as SQLAlchemyEnum, UniqueConstraint, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, ForeignKey, Enum as SQLAlchemyEnum, UniqueConstraint, Float, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -59,6 +59,7 @@ class Collection(Base):
                                   "apikey": None
                               }))
     chromadb_uuid = Column(String(36), nullable=True, unique=True, index=True)
+    graph_enabled = Column(Boolean, default=False, nullable=False)
     
     __table_args__ = (
         UniqueConstraint('name', 'owner', name='uix_collection_name_owner'),
@@ -77,7 +78,8 @@ class Collection(Base):
             "owner": self.owner,
             "visibility": self.visibility.value,
             "embeddings_model": json.loads(self.embeddings_model) if isinstance(self.embeddings_model, str) else self.embeddings_model,
-            "chromadb_uuid": self.chromadb_uuid
+            "chromadb_uuid": self.chromadb_uuid,
+            "graph_enabled": bool(self.graph_enabled)
         }
 
 

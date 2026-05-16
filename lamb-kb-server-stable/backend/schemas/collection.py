@@ -31,6 +31,7 @@ class CollectionBase(BaseModel):
     name: str = Field(..., description="Name of the collection", min_length=1, max_length=255)
     description: Optional[str] = Field(None, description="Optional description of the collection")
     visibility: str = Field("private", description="Visibility setting ('private' or 'public')")
+    graph_enabled: bool = Field(False, description="Whether Graph RAG indexing is enabled for this collection")
 
 
 class CollectionCreate(CollectionBase):
@@ -47,6 +48,7 @@ class CollectionUpdate(BaseModel):
     name: Optional[str] = Field(None, description="New name of the collection", min_length=1, max_length=255)
     description: Optional[str] = Field(None, description="New description of the collection")
     visibility: Optional[str] = Field(None, description="New visibility setting ('private' or 'public')")
+    graph_enabled: Optional[bool] = Field(None, description="Enable or disable Graph RAG indexing for this collection")
     embeddings_model: Optional[EmbeddingsModel] = Field(
         None, 
         description="New embeddings model configuration"
@@ -59,6 +61,7 @@ class CollectionResponse(CollectionBase):
     owner: str = Field(..., description="Owner of the collection")
     creation_date: datetime = Field(..., description="Creation date of the collection")
     embeddings_model: EmbeddingsModelSafe = Field(..., description="Embeddings model configuration (API key hidden)")
+    graph_enabled: bool = Field(False, description="Whether Graph RAG indexing is enabled for this collection")
 
     class Config:
         """Pydantic config for collection response."""

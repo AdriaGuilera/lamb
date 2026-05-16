@@ -218,6 +218,8 @@ class GraphStore:
         *,
         concept: Optional[str] = None,
         document_id: Optional[str] = None,
+        chunk_id: Optional[str] = None,
+        filename: Optional[str] = None,
         include_chunks: bool = True,
         limit: int = 60,
     ) -> Dict[str, Any]:
@@ -229,14 +231,17 @@ class GraphStore:
                 "filters": {
                     "concept": concept or "",
                     "document_id": document_id or "",
+                    "chunk_id": chunk_id or "",
+                    "filename": filename or "",
                     "include_chunks": include_chunks,
                     "limit": limit,
                 },
-                "counts": {"concepts": 0, "chunks": 0, "edges": 0},
+                "counts": {"concepts": 0, "documents": 0, "chunks": 0, "edges": 0},
             }
 
         limit = max(1, min(int(limit or 60), 200))
         concept_filter = normalize_concept(concept or "") or None
+        filename_filter = (filename or "").strip().lower() or None
 
         with self.driver.session() as session:
             concept_rows = session.run(
@@ -258,6 +263,20 @@ class GraphStore:
                         MATCH (:Document {document_id: $document_id})-[:CONTAINS]->(:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept)
                     }
                   )
+                                    AND (
+                                        $chunk_id IS NULL
+                                        OR EXISTS {
+                                                MATCH (:Chunk {collection_id: $collection_id, chunk_id: $chunk_id})-[:MENTIONS]->(concept)
+                                        }
+                                    )
+                                    AND (
+                                        $filename_filter IS NULL
+                                        OR EXISTS {
+                                                MATCH (doc:Document {collection_id: $collection_id})-[:CONTAINS]->(:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept)
+                                                WHERE toLower(coalesce(doc.filename, '')) CONTAINS $filename_filter
+                                                     OR toLower(coalesce(doc.document_id, '')) CONTAINS $filename_filter
+                                        }
+                                    )
                 OPTIONAL MATCH (concept)<-[:MENTIONS]-(chunk:Chunk {collection_id: $collection_id})
                 RETURN concept.name AS name,
                        coalesce(concept.display_name, concept.name) AS display_name,
@@ -274,6 +293,8 @@ class GraphStore:
                 org_id=org_id,
                 concept_filter=concept_filter,
                 document_id=document_id,
+                chunk_id=chunk_id,
+                filename_filter=filename_filter,
                 limit=limit,
             ).data()
 
@@ -286,11 +307,42 @@ class GraphStore:
                     "filters": {
                         "concept": concept or "",
                         "document_id": document_id or "",
+                        "chunk_id": chunk_id or "",
+                        "filename": filename or "",
                         "include_chunks": include_chunks,
                         "limit": limit,
                     },
-                    "counts": {"concepts": 0, "chunks": 0, "edges": 0},
+                    "counts": {"concepts": 0, "documents": 0, "chunks": 0, "edges": 0},
                 }
+
+            document_rows = session.run(
+                """
+                MATCH (doc:Document {collection_id: $collection_id})-[:CONTAINS]->(chunk:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept:Concept {org_id: $org_id})
+                WHERE concept.name IN $concept_names
+                  AND ($document_id IS NULL OR doc.document_id = $document_id)
+                                    AND ($chunk_id IS NULL OR chunk.chunk_id = $chunk_id)
+                  AND (
+                    $filename_filter IS NULL
+                    OR toLower(coalesce(doc.filename, '')) CONTAINS $filename_filter
+                    OR toLower(coalesce(doc.document_id, '')) CONTAINS $filename_filter
+                  )
+                WITH doc, count(DISTINCT chunk) AS chunk_count, collect(DISTINCT concept.name) AS concepts
+                RETURN doc.document_id AS document_id,
+                       doc.filename AS filename,
+                       doc.file_id AS file_id,
+                       chunk_count AS chunk_count,
+                       concepts[0..10] AS concepts
+                ORDER BY filename ASC, document_id ASC
+                LIMIT $document_limit
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                concept_names=concept_names,
+                document_id=document_id,
+                chunk_id=chunk_id,
+                filename_filter=filename_filter,
+                document_limit=limit,
+            ).data()
 
             relationship_rows = session.run(
                 """
@@ -324,6 +376,12 @@ class GraphStore:
                     MATCH (doc:Document {collection_id: $collection_id})-[:CONTAINS]->(chunk:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept:Concept {org_id: $org_id})
                     WHERE concept.name IN $concept_names
                       AND ($document_id IS NULL OR doc.document_id = $document_id)
+                                            AND ($chunk_id IS NULL OR chunk.chunk_id = $chunk_id)
+                                            AND (
+                                                $filename_filter IS NULL
+                                                OR toLower(coalesce(doc.filename, '')) CONTAINS $filename_filter
+                                                OR toLower(coalesce(doc.document_id, '')) CONTAINS $filename_filter
+                                            )
                     WITH chunk, doc, collect(DISTINCT concept.name) AS concepts
                     RETURN chunk.chunk_id AS chunk_id,
                            coalesce(chunk.source_label, chunk.chunk_id) AS source_label,
@@ -338,6 +396,8 @@ class GraphStore:
                     org_id=org_id,
                     concept_names=concept_names,
                     document_id=document_id,
+                    chunk_id=chunk_id,
+                    filename_filter=filename_filter,
                     chunk_limit=limit * 3,
                 ).data()
 
@@ -359,6 +419,25 @@ class GraphStore:
                         "verification_state": row.get("verification_state")
                         or "unverified",
                         "chunk_count": int(row.get("chunk_count") or 0),
+                    },
+                }
+            )
+
+        for row in document_rows:
+            row_document_id = row.get("document_id")
+            if not row_document_id:
+                continue
+            nodes.append(
+                {
+                    "id": f"document:{row_document_id}",
+                    "type": "document",
+                    "label": row.get("filename") or row_document_id,
+                    "data": {
+                        "document_id": row_document_id,
+                        "filename": row.get("filename") or "",
+                        "file_id": row.get("file_id"),
+                        "chunk_count": int(row.get("chunk_count") or 0),
+                        "concepts": row.get("concepts") or [],
                     },
                 }
             )
@@ -418,6 +497,40 @@ class GraphStore:
                         "data": {"chunk_id": chunk_id, "concept": mentioned_concept},
                     }
                 )
+            document_id_value = row.get("document_id") or ""
+            if document_id_value:
+                edges.append(
+                    {
+                        "id": f"contains:{document_id_value}:{chunk_id}",
+                        "type": "CONTAINS",
+                        "source": f"document:{document_id_value}",
+                        "target": f"chunk:{chunk_id}",
+                        "label": "contains",
+                        "weight": 1.0,
+                        "data": {"document_id": document_id_value, "chunk_id": chunk_id},
+                    }
+                )
+
+        if not include_chunks:
+            for row in document_rows:
+                document_id_value = row.get("document_id") or ""
+                if not document_id_value:
+                    continue
+                for mentioned_concept in row.get("concepts") or []:
+                    edges.append(
+                        {
+                            "id": f"document-mention:{document_id_value}:{mentioned_concept}",
+                            "type": "DOCUMENT_MENTIONS",
+                            "source": f"document:{document_id_value}",
+                            "target": f"concept:{mentioned_concept}",
+                            "label": "mentions",
+                            "weight": 1.0,
+                            "data": {
+                                "document_id": document_id_value,
+                                "concept": mentioned_concept,
+                            },
+                        }
+                    )
 
         return {
             "collection_id": collection_id,
@@ -426,11 +539,14 @@ class GraphStore:
             "filters": {
                 "concept": concept or "",
                 "document_id": document_id or "",
+                "chunk_id": chunk_id or "",
+                "filename": filename or "",
                 "include_chunks": include_chunks,
                 "limit": limit,
             },
             "counts": {
                 "concepts": len(concept_rows),
+                "documents": len(document_rows),
                 "chunks": len(chunk_rows),
                 "edges": len(edges),
             },

@@ -346,6 +346,7 @@ class IngestionService:
         texts: List[str],
         metadatas: List[Dict[str, Any]],
         file_registry_id: Optional[int] = None,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Best-effort graph indexing for documents already stored in ChromaDB."""
         try:
@@ -356,18 +357,24 @@ class IngestionService:
             kg_config = config_module.get_kg_rag_config()
             if not kg_config.get("enabled"):
                 return {"enabled": False, "indexed": False, "reason": "disabled"}
-            if not kg_config.get("index_on_ingest", True):
-                return {
-                    "enabled": True,
-                    "indexed": False,
-                    "reason": "index_on_ingest_disabled",
-                }
 
             collection = (
                 dict(db_collection)
                 if isinstance(db_collection, dict)
                 else db_collection.to_dict()
             )
+            if not force and not collection.get("graph_enabled", False):
+                return {
+                    "enabled": True,
+                    "indexed": False,
+                    "reason": "collection_graph_disabled",
+                }
+            if not force and not kg_config.get("index_on_ingest", True):
+                return {
+                    "enabled": True,
+                    "indexed": False,
+                    "reason": "index_on_ingest_disabled",
+                }
             file_registry = None
             if file_registry_id:
                 file_registry = (

@@ -2,6 +2,7 @@
     import { createEventDispatcher } from 'svelte';
     import { _ } from '$lib/i18n';
     import { createKnowledgeBase } from '$lib/services/knowledgeBaseService';
+    import { getGraphStatus } from '$lib/services/graphService';
     import { sanitizeName } from '$lib/utils/nameSanitizer';
 
     const dispatch = createEventDispatcher();
@@ -10,14 +11,17 @@
     let isOpen = $state(false);
     let isSubmitting = $state(false);
     let error = $state('');
+    let graphStatus = $state({ enabled: false });
     
     // Form data
     let name = $state('');
     let description = $state('');
+    let graphEnabled = $state(false);
     
     // Derived: Sanitized name preview
     let sanitizedNameInfo = $derived(sanitizeName(name));
     let showSanitizationPreview = $derived(sanitizedNameInfo.wasModified && name.trim() !== '');
+    let graphFeatureAvailable = $derived(Boolean(graphStatus.enabled));
     
     // Error states
     let nameError = $state('');
@@ -26,6 +30,7 @@
     export function open() {
         isOpen = true;
         resetForm();
+        loadGraphStatus();
     }
     
     function close() {
@@ -39,9 +44,19 @@
     function resetForm() {
         name = '';
         description = '';
+        graphEnabled = false;
         error = '';
         nameError = '';
         isSubmitting = false;
+    }
+
+    async function loadGraphStatus() {
+        try {
+            graphStatus = await getGraphStatus();
+        } catch (err) {
+            console.warn('Graph RAG status unavailable:', err);
+            graphStatus = { enabled: false };
+        }
     }
     
     function validateForm() {
@@ -82,7 +97,8 @@
             const result = await createKnowledgeBase({
                 name: name.trim(),
                 description: description.trim() || undefined, // Don't send empty string
-                access_control: 'private' // Default to private, not shown in UI
+                access_control: 'private', // Default to private, not shown in UI
+                graph_enabled: graphFeatureAvailable && graphEnabled
             });
             
             console.log('Knowledge base created:', result);
@@ -209,6 +225,23 @@
                         placeholder={$_('knowledgeBases.descriptionPlaceholder', { default: 'Enter a description for this knowledge base' })}
                     ></textarea>
                 </div>
+
+                {#if graphFeatureAvailable}
+                    <div class="rounded-md border border-gray-200 p-3">
+                        <div class="flex items-center">
+                            <input
+                                id="kb-graph-enabled"
+                                type="checkbox"
+                                bind:checked={graphEnabled}
+                                class="h-4 w-4 rounded border-gray-300 text-[#2271b3] focus:ring-[#2271b3]"
+                            />
+                            <label for="kb-graph-enabled" class="ml-3 block text-sm font-medium text-gray-700">
+                                Graph RAG
+                            </label>
+                        </div>
+                        <p class="mt-1 ml-7 text-xs text-gray-500">Build the knowledge graph as files are ingested.</p>
+                    </div>
+                {/if}
                 
                 <!-- Sanitization Preview (above form actions) -->
                 {#if showSanitizationPreview}

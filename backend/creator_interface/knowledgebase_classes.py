@@ -11,6 +11,7 @@ class KnowledgeBaseCreate(BaseModel):
     name: str
     description: str = ""
     access_control: str = "private"  # private or public
+    graph_enabled: bool = False
     metadata: Optional[Dict[str, Any]] = None
 
 
