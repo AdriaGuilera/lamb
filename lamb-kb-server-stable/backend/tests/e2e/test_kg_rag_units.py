@@ -2056,6 +2056,31 @@ def test_edit_relationship_no_change_does_not_record_event():
     assert not any("SET rel.updated_at" in query for query in compact_queries)
 
 
+def test_curate_concept_no_change_does_not_record_event():
+    tx = GraphStoreSuccessTx()
+
+    result = GraphStore._update_concept_curation_tx(
+        tx,
+        collection_id=1,
+        org_id="owner",
+        concept_name="Knowledge Graph",
+        notes="old notes",
+        tags=["old"],
+        verification_state="unverified",
+        actor="test",
+        reason="test",
+        timestamp="2026-05-02T00:00:00Z",
+    )
+
+    assert result["ok"] is True
+    assert result["reason"] == "no_change"
+    assert result["event_id"] is None
+    assert result["details"]["changed"] is False
+    compact_queries = [" ".join(item["query"].split()) for item in tx.queries]
+    assert not any("CREATE (event:ChangeEvent" in query for query in compact_queries)
+    assert not any("SET concept.updated_at" in query for query in compact_queries)
+
+
 def test_revert_relationship_expunge_restores_approved_edge():
     class RelationshipExpungeTx(GraphStoreSuccessTx):
         def run(self, query, **params):

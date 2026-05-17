@@ -1,4 +1,5 @@
 <script>
+	import { tick } from 'svelte';
 	import {
 		curateGraphConcept,
 		curateGraphRelationship,
@@ -9,17 +10,28 @@
 		renameGraphConcept,
 		revertGraphChange
 	} from '$lib/services/graphService';
+	import { user } from '$lib/stores/userStore';
+	import {
+		buildExpungedConcepts,
+		buildExpungedRelationships,
+		changeDetail,
+		changeMetaLine,
+		changeOperationLabel,
+		stateClass,
+		stateLabel,
+		stateRank
+	} from '$lib/utils/graphCuration';
 
 	/** @typedef {{ [key: string]: any }} GraphData */
 	/** @typedef {{ id: string, type: string, label: string, data: GraphData, x?: number, y?: number }} GraphNode */
-	/** @typedef {GraphNode & { x: number, y: number }} PositionedGraphNode */
 	/** @typedef {{ id: string, type: string, source: string, target: string, label?: string, weight?: number, data: GraphData }} GraphEdge */
-	/** @typedef {GraphEdge & { sourceNode: PositionedGraphNode, targetNode: PositionedGraphNode }} RenderedGraphEdge */
 	/** @typedef {{ concepts?: number, documents?: number, chunks?: number, edges?: number }} GraphCounts */
 	/** @typedef {{ collection_id: string | number | null, nodes: GraphNode[], edges: GraphEdge[], filters: GraphData, counts: GraphCounts }} GraphSnapshot */
 	/** @typedef {{ value: string, label: string, node: GraphNode }} GraphOption */
 	/** @typedef {{ concept?: string, relationship_source?: string, relationship_target?: string, relationship_relation?: string, document_id?: string }} HistoryOverrides */
 	/** @typedef {{ event_id: string, operation?: string, actor?: string, timestamp?: string, filename?: string, document_id?: string, concepts?: string[], payload_json?: string }} GraphChange */
+	/** @typedef {{ GraphClass: any, SigmaClass: any, forceAtlas2: any }} SigmaModules */
+	/** @typedef {{ graphologyGraph: any, nodeLookup: Map<string, GraphNode>, edgeLookup: Map<string, GraphEdge> }} SigmaGraphModel */
 
 	let { kbId = '', canModify = false } = $props();
 
@@ -62,7 +74,7 @@
 	let historyLoading = $state(false);
 	let historyError = $state('');
 	let historyFilters = $state(/** @type {HistoryOverrides} */ ({}));
-	let historyTitle = $state('Select a relationship or concept');
+	let historyTitle = $state('Relationship / Concept History');
 	let historyRequestId = 0;
 
 	let conceptFilter = $state('');
@@ -73,12 +85,24 @@
 	let onlyConcepts = $state(false);
 	let selectedNode = $state(/** @type {GraphNode | null} */ (null));
 	let selectedEdge = $state(/** @type {GraphEdge | null} */ (null));
+	let hoveredNodeId = $state('');
+	let hoveredEdgeId = $state('');
 	let conceptSearchActive = $state(false);
 	let documentSearchActive = $state(false);
 	let chunkSearchActive = $state(false);
+	let sigmaContainer = $state(/** @type {HTMLDivElement | null} */ (null));
+	let sigmaReady = $state(false);
+	let sigmaError = $state('');
 
-	const graphWidth = 980;
+	const sigmaDefaultHeight = 620;
+	const sigmaGoldenAngle = Math.PI * (3 - Math.sqrt(5));
 	const graphCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+	let sigmaModulesPromise = /** @type {Promise<SigmaModules> | null} */ (null);
+	let sigmaRenderer = /** @type {any} */ (null);
+	let sigmaGraphInstance = /** @type {any} */ (null);
+	let sigmaNodeLookup = /** @type {Map<string, GraphNode>} */ (new Map());
+	let sigmaEdgeLookup = /** @type {Map<string, GraphEdge>} */ (new Map());
+	let sigmaRenderRequestId = 0;
 
 	$effect(() => {
 		if (kbId && kbId !== loadedKbId) {
@@ -91,7 +115,7 @@
 			expungedChanges = [];
 			changes = [];
 			historyFilters = {};
-			historyTitle = 'Select a relationship or concept';
+			historyTitle = 'Relationship / Concept History';
 		}
 	});
 
@@ -141,33 +165,44 @@
 
 	let filteredGraph = $derived.by(() => filterGraph(graph));
 	let visibleGraph = $derived.by(() => (onlyConcepts ? conceptsOnlyGraph(filteredGraph) : filteredGraph));
-	let graphHeight = $derived.by(() => {
-		const nodes = visibleGraph.nodes || [];
-		const conceptCount = nodes.filter((node) => node.type === 'concept').length;
-		const documentCount = nodes.filter((node) => node.type === 'document').length;
-		const chunkCount = nodes.filter((node) => node.type === 'chunk').length;
-		const conceptRows = Math.ceil(conceptCount / conceptColumnCount(conceptCount));
-		const rows = Math.max(7, documentCount, chunkCount, conceptRows);
-		return Math.min(2200, Math.max(620, 150 + rows * 60));
+	let visibleNodeCount = $derived((visibleGraph.nodes || []).length);
+	let visibleRelationshipCount = $derived((visibleGraph.edges || []).filter((edge) => edge.type === 'RELATES_TO').length);
+
+	$effect(() => {
+		const container = sigmaContainer;
+		const snapshot = visibleGraph;
+		const conceptMode = onlyConcepts;
+		if (!showExplorer || !container || graphLoading || (snapshot.nodes || []).length === 0) {
+			destroySigmaGraph();
+			return;
+		}
+		void renderSigmaGraph(snapshot, conceptMode, container);
 	});
-	let positionedNodes = $derived(layoutNodes(visibleGraph.nodes || []));
-	let positionById = $derived(Object.fromEntries(positionedNodes.map((node) => [node.id, node])));
-	let renderedEdges = $derived(
-		(visibleGraph.edges || [])
-			.map((edge) => ({ ...edge, sourceNode: positionById[edge.source], targetNode: positionById[edge.target] }))
-			.filter((edge) => edge.sourceNode && edge.targetNode)
-	);
+
+	$effect(() => {
+		const ready = sigmaReady;
+		const selectedNodeId = selectedNode?.id || '';
+		const selectedRelationshipKey = selectedRelationshipId || selectedEdge?.id || '';
+		const selectedConcept = selectedConceptName;
+		const hoveredNode = hoveredNodeId;
+		const hoveredEdge = hoveredEdgeId;
+		const relationshipCount = visibleRelationshipCount;
+		if (ready) updateSigmaReducers({ selectedNodeId, selectedRelationshipKey, selectedConcept, hoveredNode, hoveredEdge, relationshipCount });
+	});
 
 	async function loadGraph() {
 		if (!kbId) return;
 		graphLoading = true;
 		graphError = '';
 		try {
-			const [snapshot, relationshipExpunges, conceptExpunges] = await Promise.all([
+			const [rawSnapshot, rawRelationshipExpunges, rawConceptExpunges] = await Promise.all([
 				getGraphSnapshot(kbId, { include_chunks: true, limit: Number(graphLimit) || 140 }),
 				listGraphChanges(kbId, { operation: 'manual_expunge_relationship', limit: 200 }),
 				listGraphChanges(kbId, { operation: 'manual_expunge_concept', limit: 200 })
 			]);
+			const snapshot = /** @type {GraphSnapshot} */ (rawSnapshot);
+			const relationshipExpunges = /** @type {GraphChange[]} */ (rawRelationshipExpunges || []);
+			const conceptExpunges = /** @type {GraphChange[]} */ (rawConceptExpunges || []);
 			const nextExpungedChanges = [...(relationshipExpunges || []), ...(conceptExpunges || [])];
 			graph = snapshot;
 			expungedChanges = nextExpungedChanges;
@@ -239,7 +274,7 @@
 		optionNodes = Array.from(byId.values());
 	}
 
-	/** @param {GraphEdge} edge */
+	/** @param {GraphEdge} edge @returns {GraphEdge} */
 	function enrichRelationship(edge) {
 		const sourceName = String(edge.data?.source || '').trim();
 		const targetName = String(edge.data?.target || '').trim();
@@ -249,118 +284,14 @@
 			...edge,
 			data: {
 				...edge.data,
+				source: sourceName,
+				target: targetName,
 				source_label: sourceNode?.label || sourceName,
 				target_label: targetNode?.label || targetName,
 				verification_state: edge.data?.verification_state || 'unverified',
 				relation: edge.data?.relation || edge.label || 'related_to'
 			}
 		};
-	}
-
-	/** @param {GraphChange[]} sourceChanges @param {GraphEdge[]} activeEdges */
-	function buildExpungedRelationships(sourceChanges, activeEdges) {
-		const activeKeys = new Set(activeEdges.map((edge) => relationshipIdentityKey(edge.data?.source, edge.data?.target, edge.data?.relation)));
-		const seen = new Set();
-		const rows = [];
-		for (const change of sourceChanges || []) {
-			const payload = changePayload(change);
-			const candidates = [];
-			if (change.operation === 'manual_expunge_relationship') {
-				candidates.push({
-					source: payload.source,
-					target: payload.target,
-					relation: payload.relation || payload.new_relation || 'related_to',
-					weight: payload.old_weight,
-					description: payload.old_description,
-					evidence: payload.old_evidence,
-					chunk_id: payload.old_chunk_id,
-					notes: payload.old_notes,
-					tags: payload.old_tags
-				});
-			}
-			if (change.operation === 'manual_expunge_concept' && Array.isArray(payload.removed_relationships)) {
-				candidates.push(...payload.removed_relationships.map((relationship) => ({
-					...relationship,
-					expunged_by_concept: payload.concept
-				})));
-			}
-			for (const [index, relationship] of candidates.entries()) {
-				const source = String(relationship.source || '').trim();
-				const target = String(relationship.target || '').trim();
-				const relation = String(relationship.relation || 'related_to').trim() || 'related_to';
-				const key = relationshipIdentityKey(source, target, relation);
-				if (!source || !target || activeKeys.has(key) || seen.has(key)) continue;
-				seen.add(key);
-				rows.push({
-					id: `expunged-relationship-${change.event_id || key}${change.operation === 'manual_expunge_concept' ? `-${index}` : ''}`,
-					type: 'RELATES_TO',
-					source: `concept:${source}`,
-					target: `concept:${target}`,
-					label: relation,
-					weight: valueOrUndefined(relationship.weight),
-					data: {
-						source,
-						target,
-						source_label: source,
-						target_label: target,
-						relation,
-						description: relationship.description || '',
-						evidence: relationship.evidence || '',
-						chunk_id: relationship.chunk_id || '',
-						notes: relationship.notes || '',
-						tags: Array.isArray(relationship.tags) ? relationship.tags : [],
-						verification_state: 'rejected',
-						expunged: true,
-						expunge_event_id: change.event_id,
-						expunged_at: change.timestamp,
-						expunged_by_concept: relationship.expunged_by_concept || ''
-					}
-				});
-			}
-		}
-		return rows;
-	}
-
-	/** @param {GraphChange[]} sourceChanges @param {GraphNode[]} activeNodes */
-	function buildExpungedConcepts(sourceChanges, activeNodes) {
-		const activeNames = new Set(activeNodes.map((node) => String(node.data?.name || '')));
-		const seen = new Set();
-		const rows = [];
-		for (const change of sourceChanges || []) {
-			if (change.operation !== 'manual_expunge_concept') continue;
-			const payload = changePayload(change);
-			const concept = String(payload.concept || change.concepts?.[0] || '').trim();
-			if (!concept || activeNames.has(concept) || seen.has(concept)) continue;
-			seen.add(concept);
-			const removedMentions = Array.isArray(payload.removed_chunk_mentions) ? payload.removed_chunk_mentions : [];
-			const removedRelationships = Array.isArray(payload.removed_relationships) ? payload.removed_relationships : [];
-			rows.push({
-				id: `expunged-concept-${change.event_id || concept}`,
-				type: 'concept',
-				label: concept,
-				data: {
-					name: concept,
-					entity_type: 'concept',
-					chunk_count: removedMentions.length,
-					relationship_count: removedRelationships.length,
-					notes: payload.old_notes || '',
-					tags: Array.isArray(payload.old_tags) ? payload.old_tags : [],
-					verification_state: 'rejected',
-					expunged: true,
-					expunge_event_id: change.event_id,
-					expunged_at: change.timestamp
-				}
-			});
-		}
-		return rows;
-	}
-
-	function relationshipIdentityKey(source, target, relation) {
-		return [source, target, relation].map((value) => String(value || '').trim().toLowerCase()).join('|');
-	}
-
-	function valueOrUndefined(value) {
-		return value === undefined || value === null || value === '' ? undefined : value;
 	}
 
 	/** @param {GraphEdge} left @param {GraphEdge} right */
@@ -382,7 +313,7 @@
 		conceptNotes = node.data?.notes || '';
 		conceptTags = (node.data?.tags || []).join(', ');
 		conceptVerification = node.data?.verification_state || 'unverified';
-		historyTitle = `Concept: ${node.label || node.data?.name || ''}`;
+		historyTitle = 'Concept History';
 		void loadHistory({ concept: node.data?.name || '' });
 	}
 
@@ -398,7 +329,7 @@
 		relationshipNotes = edge.data?.notes || '';
 		relationshipTags = (edge.data?.tags || []).join(', ');
 		relationshipVerification = edge.data?.verification_state || 'unverified';
-		historyTitle = relationshipHistoryTitle(edge);
+		historyTitle = 'Relationship History';
 		void loadHistory(relationshipHistoryFilters(edge));
 	}
 
@@ -409,12 +340,12 @@
 		if (node.type === 'concept') selectConceptForReview(node);
 		if (node.type === 'document') {
 			selectedDocumentValues = addSelectedValue(selectedDocumentValues, nodeSelectionValue(node));
-			historyTitle = `Document: ${node.label || node.data?.document_id || ''}`;
+			historyTitle = 'Document History';
 			void loadHistory({ document_id: node.data?.document_id || '' });
 		}
 		if (node.type === 'chunk') {
 			selectedChunkValues = addSelectedValue(selectedChunkValues, nodeSelectionValue(node));
-			historyTitle = `Document: ${node.data?.filename || node.data?.document_id || ''}`;
+			historyTitle = 'Document History';
 			void loadHistory({ document_id: node.data?.document_id || '' });
 		}
 	}
@@ -424,6 +355,15 @@
 		selectedEdge = edge;
 		selectedNode = null;
 		if (edge.type === 'RELATES_TO') selectRelationshipForReview(enrichRelationship(edge));
+	}
+
+	function clearGraphSelection() {
+		selectedNode = null;
+		selectedEdge = null;
+		selectedConceptName = '';
+		selectedRelationshipId = '';
+		hoveredNodeId = '';
+		hoveredEdgeId = '';
 	}
 
 	async function submitConceptCuration() {
@@ -436,10 +376,11 @@
 				notes: conceptNotes,
 				tags: parseTags(conceptTags),
 				verification_state: conceptVerification,
+				actor: currentAuditActor(),
 				reason: 'Educator graph curation'
 			});
-			curationMessage = `Recorded ${result.operation || 'concept curation'}`;
-			await refreshAfterCuration();
+			curationMessage = recordedMessage(result, 'concept curation');
+			if (hasRecordedChange(result)) await refreshAfterCuration();
 		} catch (err) {
 			console.error('Error curating concept:', err);
 			curationError = err instanceof Error ? err.message : 'Failed to update concept';
@@ -456,6 +397,7 @@
 		try {
 			const result = await renameGraphConcept(kbId, selectedConcept.data.name, {
 				new_name: renameName,
+				actor: currentAuditActor(),
 				reason: 'Educator graph curation'
 			});
 			curationMessage = `Recorded ${result.operation || 'rename'}`;
@@ -478,6 +420,7 @@
 			const result = await mergeGraphConcepts(kbId, {
 				source_names: parseTags(mergeSources),
 				target_name: mergeTarget,
+				actor: currentAuditActor(),
 				reason: 'Educator graph curation'
 			});
 			curationMessage = `Recorded ${result.operation || 'merge'}`;
@@ -521,7 +464,7 @@
 		if (!canModify || actionLoading) return;
 		const filters = relationshipHistoryFilters(edge);
 		historyFilters = filters;
-		historyTitle = relationshipHistoryTitle(edge);
+		historyTitle = 'Relationship History';
 		actionLoading = true;
 		curationMessage = '';
 		curationError = '';
@@ -555,28 +498,31 @@
 		if (!canModify || actionLoading) return;
 		const filters = { concept: node.data.name };
 		historyFilters = filters;
-		historyTitle = `Concept: ${node.label || node.data?.name || ''}`;
+		historyTitle = 'Concept History';
 		actionLoading = true;
 		curationMessage = '';
 		curationError = '';
 		try {
 			const result = await curateGraphConcept(kbId, node.data.name, {
 				verification_state: state,
+				actor: currentAuditActor(),
 				reason: 'Educator graph curation'
 			});
-			curationMessage = `Recorded ${result.operation || 'concept curation'}`;
-			if (state === 'rejected') {
-				reviewTab = 'concepts';
-				statusFilter = 'rejected';
-				selectedConceptName = '';
-				selectedNode = null;
-				conceptVerification = 'rejected';
-			} else {
-				selectedConceptName = node.data.name;
-				conceptVerification = state;
+			curationMessage = recordedMessage(result, 'concept curation');
+			if (hasRecordedChange(result)) {
+				if (state === 'rejected') {
+					reviewTab = 'concepts';
+					statusFilter = 'rejected';
+					selectedConceptName = '';
+					selectedNode = null;
+					conceptVerification = 'rejected';
+				} else {
+					selectedConceptName = node.data.name;
+					conceptVerification = state;
+				}
+				await refreshAfterCuration(filters);
+				if (state === 'rejected') selectedConceptName = node.data.name;
 			}
-			await refreshAfterCuration(filters);
-			if (state === 'rejected') selectedConceptName = node.data.name;
 		} catch (err) {
 			console.error('Error updating concept state:', err);
 			curationError = err instanceof Error ? err.message : 'Failed to update concept state';
@@ -585,6 +531,7 @@
 		}
 	}
 
+	/** @param {string | undefined} eventId */
 	async function restoreExpungedItem(eventId) {
 		if (!canModify || actionLoading || !eventId) return;
 		actionLoading = true;
@@ -592,7 +539,7 @@
 		curationError = '';
 		try {
 			await revertGraphChange(kbId, eventId, {
-				actor: 'graph-curation-api',
+				actor: currentAuditActor(),
 				reason: 'Educator graph curation'
 			});
 			curationMessage = 'Restored as approved';
@@ -616,13 +563,15 @@
 		await loadHistory(filters);
 	}
 
+	/** @param {{ reason?: string, details?: GraphData } | null | undefined} result */
 	function hasRecordedChange(result) {
 		return result?.reason !== 'no_change' && result?.details?.changed !== false;
 	}
 
+	/** @param {{ operation?: string, reason?: string, details?: GraphData } | null | undefined} result @param {string} fallback */
 	function recordedMessage(result, fallback) {
 		if (!hasRecordedChange(result)) return 'No changes to record';
-		return `Recorded ${result.operation || fallback}`;
+		return `Recorded ${result?.operation || fallback}`;
 	}
 
 	/** @param {GraphEdge} edge */
@@ -633,20 +582,24 @@
 		};
 	}
 
-	/** @param {GraphEdge} edge */
-	function relationshipHistoryTitle(edge) {
-		return `${edge.data?.source_label || edge.data?.source || ''} / ${edge.data?.relation || edge.label || 'related_to'} / ${edge.data?.target_label || edge.data?.target || ''}`;
-	}
-
 	/** @param {GraphEdge} edge @param {GraphData} updates */
 	function relationshipPayload(edge, updates = {}) {
 		return {
 			source_concept: edge.data?.source,
 			target_concept: edge.data?.target,
 			relation: edge.data?.relation || edge.label || 'related_to',
+			actor: currentAuditActor(),
 			reason: 'Educator graph curation',
 			...updates
 		};
+	}
+
+	function currentAuditActor() {
+		const currentUser = $user || {};
+		const name = String(currentUser.name || currentUser.data?.name || '').trim();
+		const email = String(currentUser.email || currentUser.data?.email || '').trim();
+		if (name && email && name !== email) return `${name} <${email}>`;
+		return email || name || 'Unknown user';
 	}
 
 	/** @param {unknown} value */
@@ -678,93 +631,12 @@
 		}
 	}
 
-	/** @param {GraphChange} change */
-	function changePayload(change) {
-		try {
-			const payload = JSON.parse(change.payload_json || '{}');
-			return payload && typeof payload === 'object' ? payload : {};
-		} catch {
-			return {};
-		}
-	}
-
-	/** @param {GraphChange} change */
-	function changeOperationLabel(change) {
-		const operation = change.operation || '';
-		if (operation === 'automatic_ingestion') return 'Created by ingestion';
-		if (operation === 'manual_edit_relationship') return 'Relationship updated';
-		if (operation === 'manual_curate_relationship') return 'Relationship status updated';
-		if (operation === 'manual_expunge_relationship') return 'Relationship expunged';
-		if (operation === 'manual_curate_concept') return 'Concept status updated';
-		if (operation === 'manual_expunge_concept') return 'Concept expunged';
-		if (operation === 'manual_rename_concept') return 'Concept renamed';
-		if (operation === 'manual_merge_concepts') return 'Concepts merged';
-		return operation || 'Graph change';
-	}
-
-	/** @param {GraphChange} change */
-	function changeDetail(change) {
-		const payload = changePayload(change);
-		const operation = change.operation || '';
-		const parts = [];
-		if (payload.reason) parts.push(String(payload.reason));
-		if (
-			payload.old_verification_state &&
-			payload.verification_state &&
-			payload.old_verification_state !== payload.verification_state
-		) {
-			parts.push(`${stateLabel(payload.old_verification_state)} -> ${stateLabel(payload.verification_state)}`);
-		}
-		if (operation === 'manual_edit_relationship' && payload.source && payload.target) {
-			parts.push(`${payload.source} / ${payload.relation || payload.new_relation || 'related_to'} / ${payload.target}`);
-			if (payload.new_relation && payload.relation && payload.new_relation !== payload.relation) {
-				parts.push(`Relation ${payload.relation} -> ${payload.new_relation}`);
-			}
-		}
-		if (Array.isArray(payload.removed_chunk_mentions)) {
-			parts.push(`${payload.removed_chunk_mentions.length} mention links removed`);
-		}
-		if (Array.isArray(payload.removed_relationships)) {
-			parts.push(`${payload.removed_relationships.length} relationships removed`);
-		}
-		return parts.join(' | ');
-	}
-
 	/** @param {unknown} value */
 	function formatConfidence(value) {
 		const numeric = Number(value);
 		if (!Number.isFinite(numeric)) return 'N/A';
 		if (numeric >= 0 && numeric <= 1) return `${Math.round(numeric * 100)}%`;
 		return numeric.toFixed(2);
-	}
-
-	/** @param {unknown} value */
-	function stateLabel(value) {
-		const state = String(value || 'unverified');
-		if (state === 'unverified') return 'Unreviewed';
-		if (state === 'needs_review') return 'Needs review';
-		if (state === 'verified') return 'Approved';
-		if (state === 'rejected') return 'Expunged';
-		return state;
-	}
-
-	/** @param {unknown} value */
-	function stateRank(value) {
-		const state = String(value || 'unverified');
-		if (state === 'needs_review') return 0;
-		if (state === 'unverified') return 1;
-		if (state === 'rejected') return 2;
-		if (state === 'verified') return 3;
-		return 4;
-	}
-
-	/** @param {unknown} value */
-	function stateClass(value) {
-		const state = String(value || 'unverified');
-		if (state === 'verified') return 'bg-emerald-50 text-emerald-700 ring-emerald-200';
-		if (state === 'rejected') return 'bg-red-50 text-red-700 ring-red-200';
-		if (state === 'needs_review') return 'bg-amber-50 text-amber-800 ring-amber-200';
-		return 'bg-slate-50 text-slate-700 ring-slate-200';
 	}
 
 	/** @param {GraphEdge} edge */
@@ -1065,15 +937,6 @@
 		return graphWithCounts(snapshot, nodes, edges);
 	}
 
-	/** @param {number} count */
-	function conceptColumnCount(count) {
-		if (count > 48) return 5;
-		if (count > 32) return 4;
-		if (count > 16) return 3;
-		if (count > 7) return 2;
-		return 1;
-	}
-
 	/** @param {GraphNode} node */
 	function nodeSortLabel(node) {
 		return String(node.data?.filename || node.data?.source_label || node.label || node.id || '');
@@ -1089,84 +952,21 @@
 		return Number(node.data?.chunk_count || 0);
 	}
 
-	/** @param {PositionedGraphNode[]} chunks */
-	function averageChunkY(chunks) {
-		if (chunks.length === 0) return null;
-		return chunks.reduce((sum, chunk) => sum + Number(chunk.y || 0), 0) / chunks.length;
+	/** @param {GraphNode} node */
+	function sigmaNodeSize(node) {
+		if (node.type === 'document') return 8;
+		if (node.type === 'chunk') return 5.5;
+		return Math.min(13, 7 + Math.log2(Math.max(1, Number(node.data?.chunk_count || 1))));
 	}
 
-	/** @param {number} index @param {number} total */
-	function distributedY(index, total) {
-		if (total <= 1) return graphHeight / 2;
-		return 78 + (index * (graphHeight - 156)) / Math.max(1, total - 1);
+	/** @param {GraphNode} node @param {boolean} conceptMode */
+	function sigmaNodeLabel(node, conceptMode) {
+		if (conceptMode) return truncate(node.label, 42);
+		return truncate(node.label, node.type === 'concept' ? 34 : 24);
 	}
 
 	/** @param {GraphNode} node */
-	function nodeRadius(node) {
-		if (node.type === 'document') return 22;
-		return node.type === 'chunk' ? 18 : 25;
-	}
-
-	/** @param {GraphNode} node */
-	function nodeLabelY(node) {
-		return nodeRadius(node) + 17;
-	}
-
-	/** @param {GraphEdge} edge */
-	function showEdgeLabel(edge) {
-		return selectedEdge?.id === edge.id && edge.type !== 'MENTIONS' && edge.type !== 'CONTAINS' && edge.type !== 'DOCUMENT_MENTIONS';
-	}
-
-	/** @param {GraphNode[]} nodes */
-	function layoutNodes(nodes) {
-		const conceptNodesForLayout = nodes
-			.filter((node) => node.type === 'concept')
-			.sort((left, right) => conceptSortScore(right) - conceptSortScore(left) || compareNodesByLabel(left, right));
-		const documentNodesForLayout = nodes.filter((node) => node.type === 'document').sort(compareNodesByLabel);
-		const documentOrder = new Map(documentNodesForLayout.map((node, index) => [String(node.data?.document_id || node.id), index]));
-		const chunkNodesForLayout = nodes
-			.filter((node) => node.type === 'chunk')
-			.sort((left, right) => {
-				const leftDocumentIndex = documentOrder.get(String(left.data?.document_id || '')) ?? Number.MAX_SAFE_INTEGER;
-				const rightDocumentIndex = documentOrder.get(String(right.data?.document_id || '')) ?? Number.MAX_SAFE_INTEGER;
-				return leftDocumentIndex - rightDocumentIndex || compareNodesByLabel(left, right);
-			});
-		const hasDocumentColumn = documentNodesForLayout.length > 0;
-		const documentX = 110;
-		const chunkX = hasDocumentColumn ? 380 : 190;
-		const conceptX = hasDocumentColumn ? 760 : 700;
-		const conceptColumns = conceptColumnCount(conceptNodesForLayout.length);
-		const conceptRows = Math.max(1, Math.ceil(conceptNodesForLayout.length / conceptColumns));
-		const positionedChunks = chunkNodesForLayout.map((node, index) => ({ ...node, x: chunkX, y: distributedY(index, chunkNodesForLayout.length) }));
-		const chunksByDocument = new Map();
-		for (const chunk of positionedChunks) {
-			const documentId = String(chunk.data?.document_id || '');
-			if (!documentId) continue;
-			if (!chunksByDocument.has(documentId)) chunksByDocument.set(documentId, []);
-			chunksByDocument.get(documentId).push(chunk);
-		}
-
-		return nodes.map((node) => {
-			if (node.type === 'concept') {
-				const index = conceptNodesForLayout.findIndex((item) => item.id === node.id);
-				const column = index % conceptColumns;
-				const row = Math.floor(index / conceptColumns);
-				const columnGap = conceptColumns >= 5 ? 72 : conceptColumns === 4 ? 84 : conceptColumns === 3 ? 108 : 132;
-				return { ...node, x: conceptX + (column - (conceptColumns - 1) / 2) * columnGap, y: distributedY(row, conceptRows) };
-			}
-			if (node.type === 'document') {
-				const index = documentNodesForLayout.findIndex((item) => item.id === node.id);
-				const documentId = String(node.data?.document_id || node.id);
-				const chunkY = averageChunkY(chunksByDocument.get(documentId) || []);
-				return { ...node, x: documentX, y: chunkY ?? distributedY(index, documentNodesForLayout.length) };
-			}
-			return positionedChunks.find((item) => item.id === node.id) || { ...node, x: chunkX, y: graphHeight / 2 };
-		});
-	}
-
-	/** @param {GraphNode} node */
-	function nodeFill(node) {
-		if (selectedNode?.id === node.id || selectedConceptName === node.data?.name) return '#1d4ed8';
+	function sigmaNodeBaseColor(node) {
 		if (node.type === 'document') return '#4f46e5';
 		if (node.type === 'chunk') return '#f59e0b';
 		const state = node.data?.verification_state;
@@ -1177,44 +977,345 @@
 	}
 
 	/** @param {GraphEdge} edge */
-	function edgeStroke(edge) {
-		if (selectedEdge?.id === edge.id || selectedRelationshipId === edge.id) return '#1d4ed8';
-		if (edge.type === 'CONTAINS') return '#475569';
+	function sigmaEdgeBaseColor(edge) {
+		if (edge.type === 'CONTAINS') return '#64748b';
 		if (edge.type === 'DOCUMENT_MENTIONS') return '#7c3aed';
 		if (edge.type === 'MENTIONS') return '#d97706';
 		return '#2271b3';
 	}
 
 	/** @param {GraphEdge} edge */
-	function edgeWidth(edge) {
-		if (selectedEdge?.id === edge.id || selectedRelationshipId === edge.id) return 3.6;
-		if (edge.type === 'RELATES_TO') return 1.9;
-		return 1.1;
+	function sigmaEdgeBaseSize(edge) {
+		if (edge.type === 'RELATES_TO') return 1.4;
+		if (edge.type === 'CONTAINS') return 0.9;
+		return 0.7;
 	}
 
-	/** @param {GraphEdge} edge */
-	function edgeOpacity(edge) {
-		if (selectedEdge?.id === edge.id || selectedRelationshipId === edge.id) return 0.95;
-		if (edge.type === 'CONTAINS') return 0.28;
-		if (edge.type === 'MENTIONS') return 0.18;
-		if (edge.type === 'DOCUMENT_MENTIONS') return 0.24;
-		return 0.42;
+	/** @param {GraphEdge} edge @param {boolean} conceptMode */
+	function sigmaEdgeLabel(edge, conceptMode) {
+		if (edge.type !== 'RELATES_TO') return '';
+		return truncate(edge.data?.relation || edge.label || edge.type, conceptMode ? 34 : 26);
 	}
 
-	/** @param {GraphEdge} edge */
-	function edgeDash(edge) {
-		if (edge.type === 'MENTIONS') return '3 4';
-		if (edge.type === 'DOCUMENT_MENTIONS') return '4 5';
-		return '';
+	/** @returns {Promise<SigmaModules>} */
+	function loadSigmaModules() {
+		if (!sigmaModulesPromise) {
+			sigmaModulesPromise = Promise.all([
+				import('graphology'),
+				import('sigma'),
+				import('graphology-layout-forceatlas2')
+			]).then(([graphologyModule, sigmaModule, forceAtlasModule]) => ({
+				GraphClass: graphologyModule.MultiDirectedGraph || graphologyModule.default,
+				SigmaClass: sigmaModule.default,
+				forceAtlas2: forceAtlasModule.default
+			}));
+		}
+		return sigmaModulesPromise;
 	}
 
-	/** @param {KeyboardEvent} event @param {() => void} callback */
-	function activateWithKeyboard(event, callback) {
-		if (event.key === 'Enter' || event.key === ' ') {
-			event.preventDefault();
-			callback();
+	/** @param {GraphSnapshot} snapshot @param {boolean} conceptMode @param {HTMLDivElement} container */
+	async function renderSigmaGraph(snapshot, conceptMode, container) {
+		const requestId = ++sigmaRenderRequestId;
+		sigmaReady = false;
+		sigmaError = '';
+		resetSigmaGraph();
+		await tick();
+		try {
+			const modules = await loadSigmaModules();
+			if (requestId !== sigmaRenderRequestId || sigmaContainer !== container || !showExplorer) return;
+			const model = buildSigmaGraphModel(snapshot, modules.GraphClass, modules.forceAtlas2, conceptMode);
+			sigmaGraphInstance = model.graphologyGraph;
+			sigmaNodeLookup = model.nodeLookup;
+			sigmaEdgeLookup = model.edgeLookup;
+			sigmaRenderer = new modules.SigmaClass(model.graphologyGraph, container, {
+				allowInvalidContainer: true,
+				zIndex: true,
+				renderEdgeLabels: true,
+				enableEdgeClickEvents: true,
+				enableEdgeHoverEvents: true,
+				labelDensity: conceptMode ? 0.85 : 0.45,
+				labelGridCellSize: conceptMode ? 80 : 96,
+				labelRenderedSizeThreshold: conceptMode ? 7 : 9,
+				labelFont: 'Inter, ui-sans-serif, system-ui, sans-serif',
+				labelSize: 12,
+				labelWeight: '600',
+				edgeLabelSize: 10,
+				edgeLabelWeight: '600',
+				defaultEdgeColor: '#94a3b8',
+				defaultNodeColor: '#2271b3'
+			});
+			attachSigmaEvents(sigmaRenderer);
+			sigmaReady = true;
+			updateSigmaReducers({
+				selectedNodeId: selectedNode?.id || '',
+				selectedRelationshipKey: selectedRelationshipId || selectedEdge?.id || '',
+				selectedConcept: selectedConceptName,
+				hoveredNode: hoveredNodeId,
+				hoveredEdge: hoveredEdgeId,
+				relationshipCount: visibleRelationshipCount,
+				conceptMode
+			});
+		} catch (err) {
+			if (requestId !== sigmaRenderRequestId) return;
+			console.error('Error rendering Sigma graph:', err);
+			sigmaError = err instanceof Error ? err.message : 'Failed to render graph';
+			resetSigmaGraph();
 		}
 	}
+
+	function destroySigmaGraph() {
+		sigmaRenderRequestId += 1;
+		resetSigmaGraph();
+	}
+
+	function resetSigmaGraph() {
+		if (sigmaRenderer) sigmaRenderer.kill();
+		sigmaRenderer = null;
+		sigmaGraphInstance = null;
+		sigmaNodeLookup = new Map();
+		sigmaEdgeLookup = new Map();
+		sigmaReady = false;
+	}
+
+	/** @param {GraphSnapshot} snapshot @param {any} GraphClass @param {any} forceAtlas2 @param {boolean} conceptMode @returns {SigmaGraphModel} */
+	function buildSigmaGraphModel(snapshot, GraphClass, forceAtlas2, conceptMode) {
+		const graphologyGraph = new GraphClass();
+		const nodeLookup = /** @type {Map<string, GraphNode>} */ (new Map());
+		const edgeLookup = /** @type {Map<string, GraphEdge>} */ (new Map());
+		const nodes = snapshot.nodes || [];
+		const nodeIds = new Set(nodes.map((node) => String(node.id)));
+		const positions = sigmaInitialPositions(nodes, conceptMode);
+
+		for (const node of nodes) {
+			const id = String(node.id);
+			const position = positions.get(id) || { x: 0, y: 0 };
+			nodeLookup.set(id, node);
+			graphologyGraph.addNode(id, {
+				label: sigmaNodeLabel(node, conceptMode),
+				x: position.x,
+				y: position.y,
+				size: sigmaNodeSize(node),
+				color: sigmaNodeBaseColor(node),
+				forceLabel: conceptMode || node.type === 'concept',
+				nodeType: node.type,
+				zIndex: node.type === 'concept' ? 3 : node.type === 'document' ? 2 : 1
+			});
+		}
+
+		const usedEdgeKeys = new Set();
+		for (const edge of snapshot.edges || []) {
+			const source = String(edge.source);
+			const target = String(edge.target);
+			if (!nodeIds.has(source) || !nodeIds.has(target)) continue;
+			const edgeKey = uniqueSigmaKey(edge.id || `${source}-${target}`, usedEdgeKeys);
+			usedEdgeKeys.add(edgeKey);
+			edgeLookup.set(edgeKey, edge);
+			graphologyGraph.addDirectedEdgeWithKey(edgeKey, source, target, {
+				label: sigmaEdgeLabel(edge, conceptMode),
+				size: sigmaEdgeBaseSize(edge),
+				color: sigmaEdgeBaseColor(edge),
+				edgeType: edge.type,
+				forceLabel: conceptMode && edge.type === 'RELATES_TO' && (snapshot.edges || []).length <= 30,
+				zIndex: edge.type === 'RELATES_TO' ? 2 : 1
+			});
+		}
+
+		runSigmaLayout(graphologyGraph, forceAtlas2, conceptMode, nodes.some((node) => node.type !== 'concept'));
+		normalizeSigmaPositions(graphologyGraph);
+		return { graphologyGraph, nodeLookup, edgeLookup };
+	}
+
+	/** @param {GraphNode[]} nodes @param {boolean} conceptMode */
+	function sigmaInitialPositions(nodes, conceptMode) {
+		const positions = /** @type {Map<string, { x: number, y: number }>} */ (new Map());
+		const ordered = [...nodes].sort(compareNodesByLabel);
+		if (conceptMode) {
+			ordered.forEach((node, index) => {
+				const distance = Math.sqrt(index + 1) * 2.2;
+				const angle = index * sigmaGoldenAngle;
+				positions.set(String(node.id), { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance });
+			});
+			return positions;
+		}
+
+		const grouped = {
+			document: ordered.filter((node) => node.type === 'document'),
+			chunk: ordered.filter((node) => node.type === 'chunk'),
+			concept: ordered.filter((node) => node.type === 'concept')
+		};
+		for (const [type, group] of Object.entries(grouped)) {
+			const x = type === 'document' ? -9 : type === 'chunk' ? 0 : 9;
+			group.forEach((node, index) => {
+				const centeredIndex = index - (group.length - 1) / 2;
+				positions.set(String(node.id), {
+					x: x + sigmaJitter(node.id, 0) * 0.6,
+					y: centeredIndex * 2.1 + sigmaJitter(node.id, 1) * 0.6
+				});
+			});
+		}
+		return positions;
+	}
+
+	/** @param {unknown} value @param {number} salt */
+	function sigmaJitter(value, salt) {
+		const text = `${value || ''}:${salt}`;
+		let hash = 0;
+		for (let index = 0; index < text.length; index += 1) hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+		return (hash % 1000) / 1000 - 0.5;
+	}
+
+	/** @param {any} graphologyGraph @param {any} forceAtlas2 @param {boolean} conceptMode @param {boolean} hasStructuralNodes */
+	function runSigmaLayout(graphologyGraph, forceAtlas2, conceptMode, hasStructuralNodes) {
+		if (!forceAtlas2 || graphologyGraph.order <= 1) return;
+		try {
+			const inferredSettings = typeof forceAtlas2.inferSettings === 'function' ? forceAtlas2.inferSettings(graphologyGraph) : {};
+			forceAtlas2.assign(graphologyGraph, {
+				iterations: conceptMode ? 180 : 260,
+				settings: {
+					...inferredSettings,
+					barnesHutOptimize: graphologyGraph.order > 80,
+					scalingRatio: conceptMode ? 18 : hasStructuralNodes ? 28 : 22,
+					gravity: conceptMode ? 0.35 : 0.7,
+					slowDown: 8,
+					strongGravityMode: false
+				}
+			});
+		} catch (err) {
+			console.warn('ForceAtlas2 layout failed, using initial graph positions:', err);
+		}
+	}
+
+	/** @param {any} graphologyGraph */
+	function normalizeSigmaPositions(graphologyGraph) {
+		let minX = Infinity;
+		let maxX = -Infinity;
+		let minY = Infinity;
+		let maxY = -Infinity;
+		graphologyGraph.forEachNode((/** @type {string} */ _, /** @type {GraphData} */ attributes) => {
+			minX = Math.min(minX, Number(attributes.x));
+			maxX = Math.max(maxX, Number(attributes.x));
+			minY = Math.min(minY, Number(attributes.y));
+			maxY = Math.max(maxY, Number(attributes.y));
+		});
+		if (![minX, maxX, minY, maxY].every(Number.isFinite)) return;
+		const centerX = (minX + maxX) / 2;
+		const centerY = (minY + maxY) / 2;
+		const scale = Math.max(maxX - minX, maxY - minY, 1);
+		graphologyGraph.forEachNode((/** @type {string} */ node, /** @type {GraphData} */ attributes) => {
+			graphologyGraph.mergeNodeAttributes(node, {
+				x: ((Number(attributes.x) - centerX) / scale) * 0.9 + 0.5,
+				y: ((Number(attributes.y) - centerY) / scale) * 0.9 + 0.5
+			});
+		});
+	}
+
+	/** @param {any} renderer */
+	function attachSigmaEvents(renderer) {
+		renderer.on('enterNode', (/** @type {{ node: string }} */ { node }) => (hoveredNodeId = String(node)));
+		renderer.on('leaveNode', () => (hoveredNodeId = ''));
+		renderer.on('clickNode', (/** @type {{ node: string }} */ { node }) => {
+			const graphNode = sigmaNodeLookup.get(String(node));
+			if (graphNode) selectGraphNode(graphNode);
+		});
+		renderer.on('enterEdge', (/** @type {{ edge: string }} */ { edge }) => {
+			hoveredEdgeId = sigmaEdgeLookup.get(String(edge))?.id || String(edge);
+		});
+		renderer.on('leaveEdge', () => (hoveredEdgeId = ''));
+		renderer.on('clickEdge', (/** @type {{ edge: string }} */ { edge }) => {
+			const graphEdge = sigmaEdgeLookup.get(String(edge));
+			if (graphEdge) selectGraphEdge(graphEdge);
+		});
+		renderer.on('clickStage', clearGraphSelection);
+	}
+
+	/** @param {{ selectedNodeId?: string, selectedRelationshipKey?: string, selectedConcept?: string, hoveredNode?: string, hoveredEdge?: string, relationshipCount?: number, conceptMode?: boolean }} state */
+	function updateSigmaReducers(state = {}) {
+		if (!sigmaRenderer) return;
+		const focusNodeIds = sigmaFocusNodeIds(state);
+		const hasFocus = Boolean(focusNodeIds.size || state.hoveredEdge || state.selectedRelationshipKey);
+		sigmaRenderer.setSetting('nodeReducer', (/** @type {string} */ nodeKey, /** @type {GraphData} */ data) => {
+			const node = sigmaNodeLookup.get(String(nodeKey));
+			if (!node) return data;
+			const highlighted = sigmaNodeHighlighted(node, state);
+			const dimmed = hasFocus && focusNodeIds.size > 0 && !focusNodeIds.has(node.id);
+			return {
+				...data,
+				color: highlighted ? '#1d4ed8' : dimmed ? '#cbd5e1' : sigmaNodeBaseColor(node),
+				size: highlighted ? sigmaNodeSize(node) + 2.5 : sigmaNodeSize(node),
+				label: sigmaShowNodeLabel(node, state, highlighted) ? sigmaNodeLabel(node, Boolean(state.conceptMode)) : '',
+				forceLabel: highlighted || (Boolean(state.conceptMode) && node.type === 'concept'),
+				zIndex: highlighted ? 10 : node.type === 'concept' ? 3 : 1
+			};
+		});
+		sigmaRenderer.setSetting('edgeReducer', (/** @type {string} */ edgeKey, /** @type {GraphData} */ data) => {
+			const edge = sigmaEdgeLookup.get(String(edgeKey));
+			if (!edge) return data;
+			const highlighted = sigmaEdgeHighlighted(edge, state);
+			const dimmed = hasFocus && !highlighted;
+			return {
+				...data,
+				color: highlighted ? '#1d4ed8' : dimmed ? '#cbd5e1' : sigmaEdgeBaseColor(edge),
+				size: highlighted ? sigmaEdgeBaseSize(edge) + 1.8 : dimmed ? Math.max(0.4, sigmaEdgeBaseSize(edge) * 0.7) : sigmaEdgeBaseSize(edge),
+				label: sigmaShowEdgeLabel(edge, state, highlighted) ? sigmaEdgeLabel(edge, Boolean(state.conceptMode)) : '',
+				forceLabel: highlighted || sigmaShowEdgeLabel(edge, state, highlighted),
+				zIndex: highlighted ? 9 : edge.type === 'RELATES_TO' ? 2 : 1
+			};
+		});
+		sigmaRenderer.refresh();
+	}
+
+	/** @param {{ selectedNodeId?: string, selectedRelationshipKey?: string, selectedConcept?: string, hoveredNode?: string, hoveredEdge?: string }} state */
+	function sigmaFocusNodeIds(state) {
+		const ids = new Set();
+		if (state.hoveredNode) ids.add(String(state.hoveredNode));
+		if (state.selectedNodeId) ids.add(String(state.selectedNodeId));
+		for (const edge of sigmaEdgeLookup.values()) {
+			const matchesNode = state.hoveredNode && (edge.source === state.hoveredNode || edge.target === state.hoveredNode);
+			const matchesEdge = sigmaEdgeHighlighted(edge, state);
+			if (matchesNode || matchesEdge) {
+				ids.add(String(edge.source));
+				ids.add(String(edge.target));
+			}
+		}
+		for (const node of sigmaNodeLookup.values()) {
+			if (state.selectedConcept && node.data?.name === state.selectedConcept) ids.add(String(node.id));
+		}
+		return ids;
+	}
+
+	/** @param {GraphNode} node @param {{ selectedNodeId?: string, selectedConcept?: string, hoveredNode?: string }} state */
+	function sigmaNodeHighlighted(node, state) {
+		return state.selectedNodeId === node.id || state.hoveredNode === node.id || state.selectedConcept === node.data?.name;
+	}
+
+	/** @param {GraphNode} node @param {{ conceptMode?: boolean }} state @param {boolean} highlighted */
+	function sigmaShowNodeLabel(node, state, highlighted) {
+		if (highlighted || state.conceptMode) return true;
+		return node.type !== 'chunk';
+	}
+
+	/** @param {GraphEdge} edge @param {{ selectedRelationshipKey?: string, hoveredNode?: string, hoveredEdge?: string }} state */
+	function sigmaEdgeHighlighted(edge, state) {
+		if (state.selectedRelationshipKey === edge.id || state.hoveredEdge === edge.id) return true;
+		return Boolean(state.hoveredNode && (edge.source === state.hoveredNode || edge.target === state.hoveredNode));
+	}
+
+	/** @param {GraphEdge} edge @param {{ conceptMode?: boolean, relationshipCount?: number }} state @param {boolean} highlighted */
+	function sigmaShowEdgeLabel(edge, state, highlighted) {
+		if (edge.type !== 'RELATES_TO') return false;
+		if (highlighted) return true;
+		return Boolean(state.conceptMode && Number(state.relationshipCount || 0) <= 28);
+	}
+
+	/** @param {string} baseKey @param {Set<string>} usedKeys */
+	function uniqueSigmaKey(baseKey, usedKeys) {
+		const normalized = String(baseKey);
+		if (!usedKeys.has(normalized)) return normalized;
+		let index = 2;
+		while (usedKeys.has(`${normalized}:${index}`)) index += 1;
+		return `${normalized}:${index}`;
+	}
+
 </script>
 
 <div class="space-y-5">
@@ -1484,10 +1585,7 @@
 
 			<div class="rounded-lg border border-gray-200 bg-white p-4">
 				<div class="flex items-center justify-between gap-3">
-					<div>
-						<h4 class="text-sm font-semibold text-gray-900">Selected History</h4>
-						<p class="mt-0.5 truncate text-xs text-gray-500">{historyTitle}</p>
-					</div>
+					<h4 class="text-sm font-semibold text-gray-900">{historyTitle}</h4>
 					<button type="button" onclick={() => loadHistory()} disabled={historyLoading} class="text-xs font-medium text-brand hover:text-brand-hover disabled:opacity-50">Refresh</button>
 				</div>
 				{#if historyError}<div class="mt-3 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">{historyError}</div>{/if}
@@ -1500,13 +1598,14 @@
 						<div class="py-4 text-sm text-gray-500">No changes found for this selection.</div>
 					{:else}
 						{#each changes as change (change.event_id)}
+							{@const metaLine = changeMetaLine(change)}
 							<div class="py-3 text-sm">
 								<div class="flex items-center justify-between gap-3">
 									<span class="font-medium text-gray-900">{changeOperationLabel(change)}</span>
 									<span class="text-xs text-gray-500">{formatDate(change.timestamp)}</span>
 								</div>
 								{#if changeDetail(change)}<div class="mt-1 text-xs text-gray-700">{changeDetail(change)}</div>{/if}
-								<div class="mt-1 text-xs text-gray-500">{change.actor || 'unknown'} / {change.filename || change.document_id || 'graph'}</div>
+								{#if metaLine}<div class="mt-1 text-xs text-gray-500">{metaLine}</div>{/if}
 							</div>
 						{/each}
 					{/if}
@@ -1605,33 +1704,14 @@
 						</div>
 					</div>
 
-					<div class="relative min-h-0 flex-1 overflow-auto bg-white">
+					<div class="relative min-h-0 flex-1 bg-white">
 						{#if graphLoading}<div class="absolute inset-0 z-10 flex items-center justify-center bg-white/70 text-sm text-gray-600">Loading graph...</div>{/if}
-						{#if positionedNodes.length === 0 && !graphLoading}
+						{#if visibleNodeCount === 0 && !graphLoading}
 							<div class="flex h-full min-h-96 items-center justify-center text-sm text-gray-500">No graph data available.</div>
 						{:else}
-							<svg class="w-full" style={`height: ${graphHeight}px; min-width: ${graphWidth}px;`} viewBox={`0 0 ${graphWidth} ${graphHeight}`} role="img" aria-label="Knowledge graph visualization">
-								<defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"></path></marker></defs>
-								{#each renderedEdges as edge (edge.id)}
-									<g>
-										<line x1={edge.sourceNode.x} y1={edge.sourceNode.y} x2={edge.targetNode.x} y2={edge.targetNode.y} stroke={edgeStroke(edge)} stroke-width={edgeWidth(edge)} stroke-opacity={edgeOpacity(edge)} stroke-dasharray={edgeDash(edge)} marker-end={edge.type === 'RELATES_TO' && (selectedEdge?.id === edge.id || selectedRelationshipId === edge.id) ? 'url(#graph-arrow)' : undefined} class="cursor-pointer" role="button" tabindex="0" aria-label={`Select ${edge.label || edge.type} edge`} onclick={() => selectGraphEdge(edge)} onkeydown={(event) => activateWithKeyboard(event, () => selectGraphEdge(edge))} />
-										{#if showEdgeLabel(edge)}<text x={(edge.sourceNode.x + edge.targetNode.x) / 2} y={(edge.sourceNode.y + edge.targetNode.y) / 2 - 6} text-anchor="middle" class="pointer-events-none select-none fill-slate-600 text-[10px]">{truncate(edge.label, 18)}</text>{/if}
-									</g>
-								{/each}
-								{#each positionedNodes as node (node.id)}
-									<g transform={`translate(${node.x}, ${node.y})`} class="cursor-pointer" role="button" tabindex="0" aria-label={`Select ${node.label} ${node.type}`} onclick={() => selectGraphNode(node)} onkeydown={(event) => activateWithKeyboard(event, () => selectGraphNode(node))}>
-										<circle r={nodeRadius(node)} fill={nodeFill(node)} stroke="#ffffff" stroke-width="3"></circle>
-										{#if node.type === 'document'}
-											<rect x="-8" y="-10" width="16" height="20" rx="2" fill="white" opacity="0.92"></rect><path d="M4 -10 L8 -6 L4 -6 Z" fill="#c7d2fe"></path><line x1="-5" y1="-2" x2="5" y2="-2" stroke="#4f46e5" stroke-width="1"></line><line x1="-5" y1="3" x2="5" y2="3" stroke="#4f46e5" stroke-width="1"></line>
-										{:else if node.type === 'concept'}
-											<text text-anchor="middle" y="4" class="pointer-events-none fill-white text-[10px] font-semibold">{node.data?.chunk_count || 0}</text>
-										{:else}
-											<rect x="-8" y="-9" width="16" height="18" rx="2" fill="white" opacity="0.9"></rect><line x1="-5" y1="-3" x2="5" y2="-3" stroke="#f59e0b" stroke-width="1"></line><line x1="-5" y1="2" x2="5" y2="2" stroke="#f59e0b" stroke-width="1"></line>
-										{/if}
-										<text text-anchor="middle" y={nodeLabelY(node)} class="pointer-events-none select-none fill-gray-700 text-[11px] font-medium">{truncate(node.label, 24)}</text>
-									</g>
-								{/each}
-							</svg>
+							<div bind:this={sigmaContainer} class="h-full w-full" style={`min-height: ${sigmaDefaultHeight}px;`} role="img" aria-label="Knowledge graph visualization"></div>
+							{#if !sigmaReady && !sigmaError && !graphLoading}<div class="absolute inset-0 flex items-center justify-center bg-white/70 text-sm text-gray-600">Rendering graph...</div>{/if}
+							{#if sigmaError}<div class="absolute inset-x-5 top-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{sigmaError}</div>{/if}
 						{/if}
 					</div>
 				</div>

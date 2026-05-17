@@ -1661,6 +1661,24 @@ class GraphStore:
         )
 
     @staticmethod
+    def _concept_update_has_changes(
+        concept_row: Dict[str, Any],
+        *,
+        notes: Optional[str],
+        tags: Optional[List[str]],
+        verification_state: Optional[str],
+    ) -> bool:
+        return any(
+            (
+                GraphStore._optional_text_changed(concept_row.get("old_notes"), notes),
+                GraphStore._optional_tags_changed(concept_row.get("old_tags"), tags),
+                GraphStore._optional_state_changed(
+                    concept_row.get("old_verification_state"), verification_state
+                ),
+            )
+        )
+
+    @staticmethod
     def _edit_relationship_tx(
         tx,
         collection_id: int,
@@ -1991,6 +2009,20 @@ class GraphStore:
                     ),
                     "removed_relationships": len(relationship_rows),
                 },
+            }
+
+        if not GraphStore._concept_update_has_changes(
+            concept_row,
+            notes=notes,
+            tags=tags,
+            verification_state=verification_state,
+        ):
+            return {
+                "ok": True,
+                "operation": None,
+                "event_id": None,
+                "reason": "no_change",
+                "details": {"concept": concept, "changed": False},
             }
 
         tx.run(
