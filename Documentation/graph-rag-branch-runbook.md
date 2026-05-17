@@ -204,6 +204,10 @@ bolt://localhost:7687
 
 Neo4j Browser is available at `http://localhost:7474/` with the configured Neo4j username and password from `.env`.
 
+The graph stores documents, chunks, concepts, and LLM-extracted `RELATES_TO` relationships. It does not persist automatic co-occurrence edges; chunk mentions remain available through `Chunk -[:MENTIONS]-> Concept`, and relation evidence is optional metadata alongside the durable `chunk_id` reference.
+
+In Graph Curation, approving marks concepts or relationships as trusted. Rejecting expunges the selected item from the active graph: rejected relationships are deleted from active traversal, and rejected concepts lose their collection-scoped mentions and relationships. The expunge action is still recorded as selected-item history, so auditability is kept without letting rejected knowledge influence KG-RAG retrieval.
+
 ## Common Pitfalls
 
 - If `KG_RAG_ENABLED=false`, the stack can be up but Graph RAG is disabled.

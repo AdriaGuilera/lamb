@@ -51,7 +51,7 @@ Inside Docker, the KB server connects to `bolt://neo4j:7687`. Neo4j Browser is e
 After documents are successfully written to ChromaDB, LAMB builds graph chunks using the generated Chroma `document_id` metadata as the Neo4j `Chunk.chunk_id`. If KG-RAG is enabled and OpenAI/Neo4j are configured, the server extracts entities and relationships from parent text units and writes:
 
 - `Organization`, `Collection`, `Document`, `Chunk`, `Concept`, and `ChangeEvent` nodes.
-- `OWNS`, `CONTAINS`, `MENTIONS`, `RELATES_TO`, `CO_OCCURS_WITH`, and `RECORDED_CHANGE` relationships.
+- `OWNS`, `CONTAINS`, `MENTIONS`, `RELATES_TO`, and `RECORDED_CHANGE` relationships.
 
 Graph indexing is best-effort. If extraction or Neo4j fails, vector ingestion still succeeds and the ingestion response includes a `kg_rag` status object.
 
@@ -75,7 +75,7 @@ curl -X POST 'http://localhost:9090/collections/1/query?plugin_name=kg_rag_query
   }'
 ```
 
-The plugin first runs the same ChromaDB vector search semantics as `simple_query`, then uses seed chunk IDs to find mentioned concepts in Neo4j. It traverses typed `RELATES_TO` paths up to `graph_depth` and uses one-hop `CO_OCCURS_WITH` as a lower-weight fallback. Expanded chunk IDs are fetched back from ChromaDB, merged with baseline results, and returned in the existing `{similarity, data, metadata}` shape.
+The plugin first runs the same ChromaDB vector search semantics as `simple_query`, then uses seed chunk IDs to find mentioned concepts in Neo4j. It traverses typed `RELATES_TO` paths up to `graph_depth`; these relationships come from the LLM extractor and carry the semantic relation label plus optional evidence metadata. Rejected concepts and relationships are excluded from expansion. Expanded chunk IDs are fetched back from ChromaDB, merged with baseline results, and returned in the existing `{similarity, data, metadata}` shape.
 
 When `include_trace` is true, each result includes `metadata.kg_rag` with seed IDs, entry concepts, traversed edges, expanded IDs, recent graph changes, latency, and fallback warnings.
 
@@ -88,12 +88,12 @@ If KG-RAG is disabled, Neo4j is not configured, no seed chunks are found, or gra
 The graph traceability API is exposed under `/graph` and uses the same bearer-token authentication as the rest of the KB server.
 
 - `GET /graph/collections/{collection_id}/snapshot`: return concept nodes, optional chunk nodes, and collection-scoped graph edges for the frontend visualization. Optional filters: `concept`, `document_id`, `include_chunks`, and `limit`.
-- `GET /graph/collections/{collection_id}/changes`: list graph change history for a collection. Optional filters: `concept`, `document_id`, `filename`, `operation`, and `limit`.
+- `GET /graph/collections/{collection_id}/changes`: list graph change history for a collection. Optional filters: `concept`, `relationship_source`, `relationship_target`, `relationship_relation`, `document_id`, `filename`, `operation`, and `limit`.
 - `GET /graph/collections/{collection_id}/changes/{event_id}`: inspect a single `ChangeEvent`, including related graph chunks when available.
 - `GET /graph/collections/{collection_id}/concepts/{concept}/changes`: inspect changes touching a concept.
 - `GET /graph/collections/{collection_id}/documents/{document_id}/changes`: inspect changes linked to a graph document.
 - `POST /graph/collections/{collection_id}/audit-trace`: replay graph expansion from seed chunk IDs and return entry concepts, traversed edges, expanded chunk IDs, recent changes, and graph latency.
-- `POST /graph/collections/{collection_id}/changes/{event_id}/revert`: revert supported graph changes. The current implementation supports automatic ingestion events by removing the graph document/chunks, reversing stored relationship/co-occurrence weights when detailed payloads are available, and recording a new `revert_change` event.
+- `POST /graph/collections/{collection_id}/changes/{event_id}/revert`: revert supported graph changes. The current implementation supports automatic ingestion events by removing the graph document/chunks, reversing stored relationship weights when detailed payloads are available, and recording a new `revert_change` event.
 
 ## Manual Curation Endpoints
 
@@ -105,9 +105,11 @@ Manual curation operations are collection-scoped and every successful operation 
 - `PATCH /graph/collections/{collection_id}/concepts/{concept}/curation`: add or update concept notes, tags, and verification state.
 - `PATCH /graph/collections/{collection_id}/relationships/curation`: add or update relationship notes, tags, and verification state without changing relation type or weight.
 
+Setting `verification_state` to `rejected` is destructive for active graph use: relationship rejection records `manual_expunge_relationship` and deletes that `RELATES_TO` edge, while concept rejection records `manual_expunge_concept` and removes that concept's collection-scoped mentions and relationships. The `ChangeEvent` remains for audit and selected-item history.
+
 ## Frontend Graph View
 
-The Svelte knowledge-base detail page includes a `Graph` tab. It renders the snapshot endpoint as an SVG concept/chunk graph, supports concept/document/limit/chunk filters, shows change history, runs graph trace audits from seed chunk IDs, and exposes curation forms for users with modification permissions.
+The Svelte knowledge-base detail page includes a `Graph Curation` tab. It prioritizes relationship and concept review lists, shows selected-item history for the currently reviewed concept or relationship, and opens the SVG graph in a full-screen explorer for navigation.
 
 ## Benchmark Endpoints
 

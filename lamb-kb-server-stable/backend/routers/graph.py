@@ -223,6 +223,15 @@ async def get_graph_snapshot(
 async def list_graph_changes(
     collection_id: int,
     concept: Optional[str] = Query(None, description="Filter by concept name"),
+    relationship_source: Optional[str] = Query(
+        None, description="Filter by relationship source concept"
+    ),
+    relationship_target: Optional[str] = Query(
+        None, description="Filter by relationship target concept"
+    ),
+    relationship_relation: Optional[str] = Query(
+        None, description="Filter by relationship relation label"
+    ),
     document_id: Optional[str] = Query(None, description="Filter by graph document ID"),
     filename: Optional[str] = Query(None, description="Filter by filename"),
     operation: Optional[str] = Query(None, description="Filter by graph operation"),
@@ -236,6 +245,9 @@ async def list_graph_changes(
         collection_id=collection_id,
         org_id=str(collection.get("owner")),
         concept=concept,
+        relationship_source=relationship_source,
+        relationship_target=relationship_target,
+        relationship_relation=relationship_relation,
         document_id=document_id,
         filename=filename,
         operation=operation,

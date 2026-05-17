@@ -1263,7 +1263,7 @@
                             Benchmarks
                         </button>
 
-                        <!-- Graph Tab -->
+                        <!-- Graph Curation Tab -->
                         <button
                             type="button"
                             onclick={() => selectTab('graph')}
@@ -1271,7 +1271,7 @@
                             style={activeTab === 'graph' ? 'border-color: #2271b3; color: #2271b3;' : ''}
                             aria-current={activeTab === 'graph' ? 'page' : undefined}
                         >
-                            Graph
+                            Graph Curation
                         </button>
                         {/if}
                     </nav>
@@ -1837,7 +1837,7 @@
                         <KnowledgeBaseBenchmarkView kbId={kbId} />
                     {/if}
 
-                    <!-- Graph Tab Content -->
+                    <!-- Graph Curation Tab Content -->
                     {#if activeTab === 'graph' && graphToolsAvailable}
                         <KnowledgeBaseGraphView kbId={kbId} canModify={kb.can_modify === true} />
                     {/if}

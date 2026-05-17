@@ -49,6 +49,21 @@ export function listGraphChanges(collectionId, filters = {}) {
 
 /**
  * @param {string | number} collectionId
+ * @param {string} eventId
+ * @param {GraphPayload} payload
+ */
+export function revertGraphChange(collectionId, eventId, payload) {
+	return apiJson(
+		`/graph/collections/${collectionId}/changes/${encodeURIComponent(eventId)}/revert`,
+		{
+			method: 'POST',
+			body: JSON.stringify(payload)
+		}
+	);
+}
+
+/**
+ * @param {string | number} collectionId
  * @param {GraphPayload} payload
  */
 export function auditGraphTrace(collectionId, payload) {

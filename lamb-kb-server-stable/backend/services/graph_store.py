@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 import config as config_module
 from services.concept_extraction import (
@@ -137,6 +137,9 @@ class GraphStore:
         org_id: str,
         *,
         concept: Optional[str] = None,
+        relationship_source: Optional[str] = None,
+        relationship_target: Optional[str] = None,
+        relationship_relation: Optional[str] = None,
         document_id: Optional[str] = None,
         filename: Optional[str] = None,
         operation: Optional[str] = None,
@@ -145,12 +148,21 @@ class GraphStore:
         if not self.ensure_schema():
             return []
         limit = max(1, min(int(limit or 25), 200))
+        concept_filter = normalize_concept(concept or "") or None
+        source_filter = normalize_concept(relationship_source or "") or None
+        target_filter = normalize_concept(relationship_target or "") or None
+        relation_filter = (
+            normalize_relation(relationship_relation) if relationship_relation else None
+        )
+        fetch_limit = min(max(limit * 10, 100), 1000)
         with self.driver.session() as session:
-            return session.run(
+            rows = session.run(
                 """
                 MATCH (event:ChangeEvent {collection_id: $collection_id, org_id: $org_id})
                 OPTIONAL MATCH (event)-[:RECORDED_CHANGE]->(doc:Document)
                 WHERE ($concept IS NULL OR $concept IN coalesce(event.concepts, []))
+                  AND ($relationship_source IS NULL OR $relationship_source IN coalesce(event.concepts, []))
+                  AND ($relationship_target IS NULL OR $relationship_target IN coalesce(event.concepts, []))
                   AND ($document_id IS NULL OR doc.document_id = $document_id)
                   AND ($filename IS NULL OR event.filename = $filename OR doc.filename = $filename)
                   AND ($operation IS NULL OR event.operation = $operation)
@@ -166,16 +178,90 @@ class GraphStore:
                        doc.document_id AS document_id,
                        doc.file_id AS file_id
                 ORDER BY event.timestamp DESC
-                LIMIT $limit
+                LIMIT $fetch_limit
                 """,
                 collection_id=collection_id,
                 org_id=org_id,
-                concept=concept,
+                concept=concept_filter,
+                relationship_source=source_filter,
+                relationship_target=target_filter,
                 document_id=document_id,
                 filename=filename,
                 operation=operation,
-                limit=limit,
+                fetch_limit=fetch_limit,
             ).data()
+        if source_filter or target_filter or relation_filter:
+            rows = [
+                row
+                for row in rows
+                if GraphStore._event_matches_relationship(
+                    row,
+                    source_filter,
+                    target_filter,
+                    relation_filter,
+                )
+            ]
+        elif concept_filter:
+            rows = [
+                row
+                for row in rows
+                if row.get("operation")
+                not in {
+                    "manual_edit_relationship",
+                    "manual_curate_relationship",
+                    "manual_expunge_relationship",
+                }
+            ]
+        return rows[:limit]
+
+    @staticmethod
+    def _event_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            payload = json.loads(row.get("payload_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _event_matches_relationship(
+        row: Dict[str, Any],
+        source: Optional[str],
+        target: Optional[str],
+        relation: Optional[str],
+    ) -> bool:
+        payload = GraphStore._event_payload(row)
+
+        def relationship_matches(candidate: Dict[str, Any]) -> bool:
+            candidate_source = normalize_concept(str(candidate.get("source") or ""))
+            candidate_target = normalize_concept(str(candidate.get("target") or ""))
+            candidate_relations = {
+                normalize_relation(str(candidate.get("relation") or "related_to"))
+            }
+            for key in ("new_relation", "old_relation", "target_relation"):
+                value = candidate.get(key)
+                if value:
+                    candidate_relations.add(normalize_relation(str(value)))
+            if source and candidate_source != source:
+                return False
+            if target and candidate_target != target:
+                return False
+            return not relation or relation in candidate_relations
+
+        details = payload.get("relationship_details")
+        if isinstance(details, list) and any(
+            isinstance(item, dict) and relationship_matches(item) for item in details
+        ):
+            return True
+
+        removed = payload.get("removed_relationships")
+        if isinstance(removed, list) and any(
+            isinstance(item, dict) and relationship_matches(item) for item in removed
+        ):
+            return True
+
+        if payload.get("source") or payload.get("target"):
+            return relationship_matches(payload)
+        return False
 
     def get_change(
         self, collection_id: int, org_id: str, event_id: str
@@ -250,8 +336,8 @@ class GraphStore:
                 WHERE (
                     EXISTS { MATCH (:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept) }
                     OR EXISTS { MATCH (concept)-[rel:RELATES_TO]-(:Concept) WHERE rel.collection_id = $collection_id }
-                    OR EXISTS { MATCH (concept)-[rel:CO_OCCURS_WITH]-(:Concept) WHERE rel.collection_id = $collection_id }
                 )
+                                    AND coalesce(concept.verification_state, '') <> 'rejected'
                   AND (
                     $concept_filter IS NULL
                     OR concept.name CONTAINS $concept_filter
@@ -282,6 +368,7 @@ class GraphStore:
                        coalesce(concept.display_name, concept.name) AS display_name,
                        coalesce(concept.entity_type, 'concept') AS entity_type,
                        concept.description AS description,
+                       concept.confidence AS confidence,
                        concept.notes AS notes,
                        coalesce(concept.tags, []) AS tags,
                        concept.verification_state AS verification_state,
@@ -346,10 +433,11 @@ class GraphStore:
 
             relationship_rows = session.run(
                 """
-                MATCH (source:Concept {org_id: $org_id})-[rel:RELATES_TO|CO_OCCURS_WITH]->(target:Concept {org_id: $org_id})
+                                MATCH (source:Concept {org_id: $org_id})-[rel:RELATES_TO]->(target:Concept {org_id: $org_id})
                 WHERE rel.collection_id = $collection_id
                   AND source.name IN $concept_names
                   AND target.name IN $concept_names
+                                    AND coalesce(rel.verification_state, '') <> 'rejected'
                 RETURN source.name AS source,
                        target.name AS target,
                        type(rel) AS type,
@@ -357,6 +445,7 @@ class GraphStore:
                        coalesce(rel.weight, 1.0) AS weight,
                        rel.description AS description,
                        rel.evidence AS evidence,
+                       rel.chunk_id AS chunk_id,
                        rel.notes AS notes,
                        coalesce(rel.tags, []) AS tags,
                        rel.verification_state AS verification_state
@@ -414,6 +503,7 @@ class GraphStore:
                         "name": row["name"],
                         "entity_type": row.get("entity_type") or "concept",
                         "description": row.get("description") or "",
+                        "confidence": row.get("confidence"),
                         "notes": row.get("notes") or "",
                         "tags": row.get("tags") or [],
                         "verification_state": row.get("verification_state")
@@ -459,6 +549,7 @@ class GraphStore:
                         "relation": relation,
                         "description": row.get("description") or "",
                         "evidence": row.get("evidence") or "",
+                        "chunk_id": row.get("chunk_id") or "",
                         "notes": row.get("notes") or "",
                         "tags": row.get("tags") or [],
                         "verification_state": row.get("verification_state")
@@ -614,6 +705,36 @@ class GraphStore:
             }
 
         operation = event_row.get("operation")
+        try:
+            payload = json.loads(event_row.get("payload_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+
+        if operation == "manual_expunge_relationship":
+            return GraphStore._restore_expunged_relationship_tx(
+                tx,
+                collection_id,
+                org_id,
+                event_id,
+                event_row,
+                payload,
+                actor,
+                reason,
+                timestamp,
+            )
+        if operation == "manual_expunge_concept":
+            return GraphStore._restore_expunged_concept_tx(
+                tx,
+                collection_id,
+                org_id,
+                event_id,
+                event_row,
+                payload,
+                actor,
+                reason,
+                timestamp,
+            )
+
         if operation != "automatic_ingestion":
             return {
                 "reverted": False,
@@ -629,11 +750,6 @@ class GraphStore:
                 "reason": "change_has_no_document",
                 "event_id": event_id,
             }
-
-        try:
-            payload = json.loads(event_row.get("payload_json") or "{}")
-        except (TypeError, json.JSONDecodeError):
-            payload = {}
 
         chunk_row = tx.run(
             """
@@ -670,31 +786,6 @@ class GraphStore:
                 target=relationship.get("target") or "",
                 relation=relationship.get("relation") or "related_to",
                 confidence=float(relationship.get("confidence") or 1.0),
-            )
-
-        cooccurrence_details = payload.get("cooccurrence_details")
-        if not isinstance(cooccurrence_details, list):
-            cooccurrence_details = payload.get("cooccurrences")
-        if not isinstance(cooccurrence_details, list):
-            cooccurrence_details = []
-
-        for cooccurrence in cooccurrence_details:
-            if not isinstance(cooccurrence, dict):
-                continue
-            tx.run(
-                """
-                MATCH (source:Concept {org_id: $org_id, name: $source})
-                MATCH (target:Concept {org_id: $org_id, name: $target})
-                MATCH (source)-[rel:CO_OCCURS_WITH {collection_id: $collection_id}]->(target)
-                SET rel.weight = coalesce(rel.weight, 0) - 1
-                WITH rel
-                WHERE coalesce(rel.weight, 0) <= 0
-                DELETE rel
-                """,
-                org_id=org_id,
-                collection_id=collection_id,
-                source=cooccurrence.get("source") or "",
-                target=cooccurrence.get("target") or "",
             )
 
         tx.run(
@@ -760,6 +851,304 @@ class GraphStore:
             ),
             "operation": operation,
             "document_id": document_id,
+            "chunk_ids": chunk_ids,
+        }
+
+    @staticmethod
+    def _create_revert_event_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        event_id: str,
+        actor: str,
+        timestamp: str,
+        filename: str,
+        concepts: List[str],
+        payload: Dict[str, Any],
+    ) -> Optional[str]:
+        revert_row = tx.run(
+            """
+            CREATE (event:ChangeEvent {
+              event_id: randomUUID(),
+              collection_id: $collection_id,
+              org_id: $org_id,
+              operation: 'revert_change',
+              actor: $actor,
+              timestamp: $timestamp,
+              filename: $filename,
+              concepts: $concepts,
+              payload_json: $payload_json
+            })
+            WITH event
+            MATCH (original:ChangeEvent {event_id: $event_id, collection_id: $collection_id, org_id: $org_id})
+            MERGE (event)-[:REVERTS]->(original)
+            RETURN event.event_id AS revert_event_id
+            """,
+            collection_id=collection_id,
+            org_id=org_id,
+            event_id=event_id,
+            actor=actor,
+            timestamp=timestamp,
+            filename=filename,
+            concepts=sorted({concept for concept in concepts if concept}),
+            payload_json=json.dumps(payload, ensure_ascii=False),
+        ).single()
+        return revert_row.get("revert_event_id") if revert_row else None
+
+    @staticmethod
+    def _restore_concept_node_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        concept: str,
+        timestamp: str,
+        *,
+        notes: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> str:
+        normalized = normalize_concept(concept or "")
+        if not normalized:
+            return ""
+        tx.run(
+            """
+            MERGE (concept:Concept {org_id: $org_id, name: $concept})
+              ON CREATE SET concept.created_at = $timestamp,
+                            concept.sources = []
+            SET concept.updated_at = $timestamp,
+                concept.collection_hint = $collection_id,
+                concept.display_name = coalesce(concept.display_name, $concept),
+                concept.entity_type = coalesce(concept.entity_type, 'concept'),
+                concept.notes = CASE WHEN $notes IS NULL THEN concept.notes ELSE $notes END,
+                concept.tags = CASE WHEN $tags IS NULL THEN concept.tags ELSE $tags END,
+                concept.verification_state = 'verified'
+            """,
+            collection_id=collection_id,
+            org_id=org_id,
+            concept=normalized,
+            notes=notes,
+            tags=tags if isinstance(tags, list) else None,
+            timestamp=timestamp,
+        )
+        return normalized
+
+    @staticmethod
+    def _relationship_restore_weight(value: Any) -> float:
+        try:
+            return float(value if value is not None else 1.0)
+        except (TypeError, ValueError):
+            return 1.0
+
+    @staticmethod
+    def _restore_relationship_payload_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        relationship: Dict[str, Any],
+        timestamp: str,
+    ) -> Optional[Dict[str, str]]:
+        source = GraphStore._restore_concept_node_tx(
+            tx,
+            collection_id,
+            org_id,
+            str(relationship.get("source") or ""),
+            timestamp,
+        )
+        target = GraphStore._restore_concept_node_tx(
+            tx,
+            collection_id,
+            org_id,
+            str(relationship.get("target") or ""),
+            timestamp,
+        )
+        relation = normalize_relation(str(relationship.get("relation") or "related_to"))
+        if not source or not target or not relation:
+            return None
+        tags = relationship.get("tags")
+        tx.run(
+            """
+            MATCH (source:Concept {org_id: $org_id, name: $source})
+            MATCH (target:Concept {org_id: $org_id, name: $target})
+            MERGE (source)-[rel:RELATES_TO {collection_id: $collection_id, relation: $relation}]->(target)
+              ON CREATE SET rel.created_at = $timestamp
+            SET rel.updated_at = $timestamp,
+                rel.weight = $weight,
+                rel.description = $description,
+                rel.evidence = $evidence,
+                rel.chunk_id = $chunk_id,
+                rel.notes = $notes,
+                rel.tags = $tags,
+                rel.verification_state = 'verified'
+            """,
+            collection_id=collection_id,
+            org_id=org_id,
+            source=source,
+            target=target,
+            relation=relation,
+            weight=GraphStore._relationship_restore_weight(relationship.get("weight")),
+            description=relationship.get("description") or "",
+            evidence=relationship.get("evidence") or "",
+            chunk_id=relationship.get("chunk_id") or "",
+            notes=relationship.get("notes"),
+            tags=tags if isinstance(tags, list) else [],
+            timestamp=timestamp,
+        )
+        return {"source": source, "target": target, "relation": relation}
+
+    @staticmethod
+    def _restore_expunged_relationship_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        event_id: str,
+        event_row: Dict[str, Any],
+        payload: Dict[str, Any],
+        actor: str,
+        reason: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        restored = GraphStore._restore_relationship_payload_tx(
+            tx,
+            collection_id,
+            org_id,
+            {
+                "source": payload.get("source"),
+                "target": payload.get("target"),
+                "relation": payload.get("relation") or payload.get("new_relation"),
+                "weight": payload.get("old_weight"),
+                "description": payload.get("old_description"),
+                "evidence": payload.get("old_evidence"),
+                "chunk_id": payload.get("old_chunk_id"),
+                "notes": payload.get("old_notes"),
+                "tags": payload.get("old_tags"),
+            },
+            timestamp,
+        )
+        if not restored:
+            return {
+                "reverted": False,
+                "reason": "invalid_expunge_payload",
+                "event_id": event_id,
+                "operation": event_row.get("operation"),
+            }
+        revert_event_id = GraphStore._create_revert_event_tx(
+            tx,
+            collection_id,
+            org_id,
+            event_id,
+            actor,
+            timestamp,
+            event_row.get("filename") or "",
+            [restored["source"], restored["target"]],
+            {
+                "reverted_event_id": event_id,
+                "reverted_operation": event_row.get("operation"),
+                "source": restored["source"],
+                "target": restored["target"],
+                "relation": restored["relation"],
+                "verification_state": "verified",
+                "reason": reason,
+            },
+        )
+        return {
+            "reverted": True,
+            "event_id": event_id,
+            "revert_event_id": revert_event_id,
+            "operation": event_row.get("operation"),
+            "chunk_ids": [],
+        }
+
+    @staticmethod
+    def _restore_expunged_concept_tx(
+        tx,
+        collection_id: int,
+        org_id: str,
+        event_id: str,
+        event_row: Dict[str, Any],
+        payload: Dict[str, Any],
+        actor: str,
+        reason: str,
+        timestamp: str,
+    ) -> Dict[str, Any]:
+        concept = GraphStore._restore_concept_node_tx(
+            tx,
+            collection_id,
+            org_id,
+            str(payload.get("concept") or (event_row.get("concepts") or [""])[0]),
+            timestamp,
+            notes=payload.get("old_notes"),
+            tags=payload.get("old_tags"),
+        )
+        if not concept:
+            return {
+                "reverted": False,
+                "reason": "invalid_expunge_payload",
+                "event_id": event_id,
+                "operation": event_row.get("operation"),
+            }
+
+        chunk_ids = [
+            str(chunk_id)
+            for chunk_id in payload.get("removed_chunk_mentions") or []
+            if chunk_id
+        ]
+        for chunk_id in chunk_ids:
+            tx.run(
+                """
+                MATCH (chunk:Chunk {collection_id: $collection_id, chunk_id: $chunk_id})
+                MATCH (concept:Concept {org_id: $org_id, name: $concept})
+                MERGE (chunk)-[mention:MENTIONS]->(concept)
+                  ON CREATE SET mention.created_at = $timestamp
+                SET mention.collection_id = $collection_id
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                chunk_id=chunk_id,
+                concept=concept,
+                timestamp=timestamp,
+            )
+
+        restored_relationships: List[Dict[str, str]] = []
+        for relationship in payload.get("removed_relationships") or []:
+            if not isinstance(relationship, dict):
+                continue
+            restored = GraphStore._restore_relationship_payload_tx(
+                tx,
+                collection_id,
+                org_id,
+                relationship,
+                timestamp,
+            )
+            if restored:
+                restored_relationships.append(restored)
+
+        touched_concepts = {concept}
+        for relationship in restored_relationships:
+            touched_concepts.add(relationship["source"])
+            touched_concepts.add(relationship["target"])
+        revert_event_id = GraphStore._create_revert_event_tx(
+            tx,
+            collection_id,
+            org_id,
+            event_id,
+            actor,
+            timestamp,
+            event_row.get("filename") or "",
+            list(touched_concepts),
+            {
+                "reverted_event_id": event_id,
+                "reverted_operation": event_row.get("operation"),
+                "concept": concept,
+                "verification_state": "verified",
+                "restored_chunk_mentions": chunk_ids,
+                "restored_relationships": restored_relationships,
+                "reason": reason,
+            },
+        )
+        return {
+            "reverted": True,
+            "event_id": event_id,
+            "revert_event_id": revert_event_id,
+            "operation": event_row.get("operation"),
             "chunk_ids": chunk_ids,
         }
 
@@ -927,7 +1316,6 @@ class GraphStore:
             MATCH (concept:Concept {org_id: $org_id, name: $concept})
             WHERE EXISTS { MATCH (:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept) }
                OR EXISTS { MATCH (concept)-[rel:RELATES_TO]-(:Concept) WHERE rel.collection_id = $collection_id }
-               OR EXISTS { MATCH (concept)-[rel:CO_OCCURS_WITH]-(:Concept) WHERE rel.collection_id = $collection_id }
             RETURN concept.name AS name,
                    concept.notes AS old_notes,
                    concept.tags AS old_tags,
@@ -1048,52 +1436,11 @@ class GraphStore:
             timestamp=timestamp,
         ).single()
 
-        outgoing_cooccurrences = tx.run(
-            """
-            MATCH (target:Concept {org_id: $org_id, name: $target})
-            MATCH (source:Concept {org_id: $org_id, name: $source})-[rel:CO_OCCURS_WITH {collection_id: $collection_id}]->(other:Concept {org_id: $org_id})
-            WHERE other.name <> $target
-            MERGE (target)-[newRel:CO_OCCURS_WITH {collection_id: $collection_id}]->(other)
-              ON CREATE SET newRel.created_at = $timestamp,
-                            newRel.weight = 0
-            SET newRel.weight = coalesce(newRel.weight, 0) + coalesce(rel.weight, 1),
-                newRel.updated_at = $timestamp
-            DELETE rel
-            RETURN count(rel) AS count
-            """,
-            org_id=org_id,
-            source=source_name,
-            target=target_name,
-            collection_id=collection_id,
-            timestamp=timestamp,
-        ).single()
-
-        incoming_cooccurrences = tx.run(
-            """
-            MATCH (target:Concept {org_id: $org_id, name: $target})
-            MATCH (other:Concept {org_id: $org_id})-[rel:CO_OCCURS_WITH {collection_id: $collection_id}]->(source:Concept {org_id: $org_id, name: $source})
-            WHERE other.name <> $target
-            MERGE (other)-[newRel:CO_OCCURS_WITH {collection_id: $collection_id}]->(target)
-              ON CREATE SET newRel.created_at = $timestamp,
-                            newRel.weight = 0
-            SET newRel.weight = coalesce(newRel.weight, 0) + coalesce(rel.weight, 1),
-                newRel.updated_at = $timestamp
-            DELETE rel
-            RETURN count(rel) AS count
-            """,
-            org_id=org_id,
-            source=source_name,
-            target=target_name,
-            collection_id=collection_id,
-            timestamp=timestamp,
-        ).single()
-
         deleted_source = tx.run(
             """
             MATCH (source:Concept {org_id: $org_id, name: $source})
             WHERE NOT EXISTS { MATCH (:Chunk)-[:MENTIONS]->(source) }
               AND NOT EXISTS { MATCH (source)-[:RELATES_TO]-(:Concept) }
-              AND NOT EXISTS { MATCH (source)-[:CO_OCCURS_WITH]-(:Concept) }
             DETACH DELETE source
             RETURN count(source) AS count
             """,
@@ -1111,12 +1458,6 @@ class GraphStore:
             ),
             "outgoing_relationships": outgoing.get("count", 0) if outgoing else 0,
             "incoming_relationships": incoming.get("count", 0) if incoming else 0,
-            "outgoing_cooccurrences": (
-                outgoing_cooccurrences.get("count", 0) if outgoing_cooccurrences else 0
-            ),
-            "incoming_cooccurrences": (
-                incoming_cooccurrences.get("count", 0) if incoming_cooccurrences else 0
-            ),
             "deleted_source": deleted_source.get("count", 0) if deleted_source else 0,
         }
 
@@ -1250,6 +1591,76 @@ class GraphStore:
         }
 
     @staticmethod
+    def _optional_text_changed(
+        current: Optional[str], requested: Optional[str]
+    ) -> bool:
+        if requested is None:
+            return False
+        return (current or "") != (requested or "")
+
+    @staticmethod
+    def _optional_tags_changed(
+        current: Optional[List[str]], requested: Optional[List[str]]
+    ) -> bool:
+        if requested is None:
+            return False
+        return list(current or []) != list(requested or [])
+
+    @staticmethod
+    def _optional_weight_changed(
+        current: Optional[float], requested: Optional[float]
+    ) -> bool:
+        if requested is None:
+            return False
+        try:
+            return (
+                abs(float(current if current is not None else 1.0) - float(requested))
+                > 1e-9
+            )
+        except (TypeError, ValueError):
+            return current != requested
+
+    @staticmethod
+    def _optional_state_changed(
+        current: Optional[str], requested: Optional[str]
+    ) -> bool:
+        if requested is None:
+            return False
+        return str(current or "unverified") != requested
+
+    @staticmethod
+    def _relationship_update_has_changes(
+        rel_row: Dict[str, Any],
+        *,
+        current_relation: str,
+        target_relation: str,
+        weight: Optional[float],
+        description: Optional[str],
+        evidence: Optional[str],
+        notes: Optional[str],
+        tags: Optional[List[str]],
+        verification_state: Optional[str],
+    ) -> bool:
+        if target_relation != current_relation:
+            return True
+        return any(
+            (
+                GraphStore._optional_weight_changed(rel_row.get("old_weight"), weight),
+                GraphStore._optional_text_changed(
+                    rel_row.get("old_description"), description
+                ),
+                GraphStore._optional_text_changed(
+                    rel_row.get("old_evidence"), evidence
+                ),
+                GraphStore._optional_text_changed(rel_row.get("old_notes"), notes),
+                GraphStore._optional_tags_changed(rel_row.get("old_tags"), tags),
+                GraphStore._optional_state_changed(
+                    rel_row.get("old_verification_state"), verification_state
+                ),
+            )
+        )
+
+    @staticmethod
     def _edit_relationship_tx(
         tx,
         collection_id: int,
@@ -1282,6 +1693,7 @@ class GraphStore:
             RETURN rel.weight AS old_weight,
                    rel.description AS old_description,
                    rel.evidence AS old_evidence,
+                     rel.chunk_id AS old_chunk_id,
                    rel.notes AS old_notes,
                    rel.tags AS old_tags,
                    rel.verification_state AS old_verification_state
@@ -1294,6 +1706,78 @@ class GraphStore:
         ).single()
         if not rel_row:
             return {"ok": False, "reason": "relationship_not_found"}
+
+        if verification_state == "rejected":
+            event_id = GraphStore._manual_change_event_tx(
+                tx,
+                collection_id,
+                org_id,
+                "manual_expunge_relationship",
+                actor,
+                timestamp,
+                [source, target],
+                {
+                    "source": source,
+                    "target": target,
+                    "relation": current_relation,
+                    "old_weight": rel_row.get("old_weight"),
+                    "old_description": rel_row.get("old_description"),
+                    "old_evidence": rel_row.get("old_evidence"),
+                    "old_chunk_id": rel_row.get("old_chunk_id"),
+                    "old_notes": rel_row.get("old_notes"),
+                    "old_tags": rel_row.get("old_tags"),
+                    "old_verification_state": rel_row.get("old_verification_state"),
+                    "verification_state": "rejected",
+                    "reason": reason,
+                },
+            )
+            tx.run(
+                """
+                MATCH (source:Concept {org_id: $org_id, name: $source})-[rel:RELATES_TO {collection_id: $collection_id, relation: $relation}]->(target:Concept {org_id: $org_id, name: $target})
+                DELETE rel
+                """,
+                org_id=org_id,
+                collection_id=collection_id,
+                source=source,
+                target=target,
+                relation=current_relation,
+            )
+            return {
+                "ok": True,
+                "operation": "manual_expunge_relationship",
+                "event_id": event_id,
+                "details": {
+                    "source": source,
+                    "target": target,
+                    "relation": current_relation,
+                    "expunged": True,
+                },
+            }
+
+        if not GraphStore._relationship_update_has_changes(
+            rel_row,
+            current_relation=current_relation,
+            target_relation=target_relation,
+            weight=weight,
+            description=description,
+            evidence=evidence,
+            notes=notes,
+            tags=tags,
+            verification_state=verification_state,
+        ):
+            return {
+                "ok": True,
+                "operation": None,
+                "event_id": None,
+                "reason": "no_change",
+                "details": {
+                    "source": source,
+                    "target": target,
+                    "old_relation": current_relation,
+                    "new_relation": target_relation,
+                    "changed": False,
+                },
+            }
 
         if target_relation == current_relation:
             tx.run(
@@ -1419,6 +1903,96 @@ class GraphStore:
         if not concept_row:
             return {"ok": False, "reason": "concept_not_found"}
 
+        if verification_state == "rejected":
+            chunk_rows = tx.run(
+                """
+                MATCH (chunk:Chunk {collection_id: $collection_id})-[mention:MENTIONS]->(concept:Concept {org_id: $org_id, name: $concept})
+                RETURN collect(DISTINCT chunk.chunk_id) AS chunk_ids
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                concept=concept,
+            ).single()
+            relationship_rows = tx.run(
+                """
+                MATCH (concept:Concept {org_id: $org_id, name: $concept})-[rel:RELATES_TO {collection_id: $collection_id}]-(other:Concept {org_id: $org_id})
+                RETURN startNode(rel).name AS source,
+                       endNode(rel).name AS target,
+                       coalesce(rel.relation, type(rel)) AS relation,
+                       type(rel) AS type,
+                       rel.weight AS weight,
+                       rel.description AS description,
+                       rel.evidence AS evidence,
+                       rel.chunk_id AS chunk_id,
+                       rel.notes AS notes,
+                       rel.tags AS tags,
+                       rel.verification_state AS verification_state
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                concept=concept,
+            ).data()
+            event_id = GraphStore._manual_change_event_tx(
+                tx,
+                collection_id,
+                org_id,
+                "manual_expunge_concept",
+                actor,
+                timestamp,
+                [concept],
+                {
+                    "concept": concept,
+                    "old_notes": concept_row.get("old_notes"),
+                    "old_tags": concept_row.get("old_tags"),
+                    "old_verification_state": concept_row.get("old_verification_state"),
+                    "verification_state": "rejected",
+                    "removed_chunk_mentions": (chunk_rows or {}).get("chunk_ids", []),
+                    "removed_relationships": relationship_rows,
+                    "reason": reason,
+                },
+            )
+            tx.run(
+                """
+                MATCH (:Chunk {collection_id: $collection_id})-[mention:MENTIONS]->(:Concept {org_id: $org_id, name: $concept})
+                DELETE mention
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                concept=concept,
+            )
+            tx.run(
+                """
+                MATCH (:Concept {org_id: $org_id, name: $concept})-[rel:RELATES_TO {collection_id: $collection_id}]-(:Concept {org_id: $org_id})
+                DELETE rel
+                """,
+                collection_id=collection_id,
+                org_id=org_id,
+                concept=concept,
+            )
+            tx.run(
+                """
+                MATCH (concept:Concept {org_id: $org_id, name: $concept})
+                WHERE NOT EXISTS { MATCH (:Chunk)-[:MENTIONS]->(concept) }
+                  AND NOT EXISTS { MATCH (concept)-[:RELATES_TO]-(:Concept) }
+                DETACH DELETE concept
+                """,
+                org_id=org_id,
+                concept=concept,
+            )
+            return {
+                "ok": True,
+                "operation": "manual_expunge_concept",
+                "event_id": event_id,
+                "details": {
+                    "concept": concept,
+                    "expunged": True,
+                    "removed_chunk_mentions": len(
+                        (chunk_rows or {}).get("chunk_ids", [])
+                    ),
+                    "removed_relationships": len(relationship_rows),
+                },
+            }
+
         tx.run(
             """
             MATCH (concept:Concept {org_id: $org_id, name: $concept})
@@ -1507,7 +2081,6 @@ class GraphStore:
                 ),
             )
 
-        cooccurrences = self._cooccurrences(chunk_list, concepts_by_chunk)
         relationship_payloads = [
             relationship.__dict__
             for relationship in relationships
@@ -1525,17 +2098,10 @@ class GraphStore:
                 concepts_by_chunk,
                 sorted(entity_payloads, key=lambda item: item["name"]),
                 relationship_payloads,
-                sorted(cooccurrences),
                 actor,
             )
 
-        return (
-            len(chunk_list)
-            + len(entity_map)
-            + len(relationship_payloads)
-            + len(cooccurrences)
-            + 1
-        )
+        return len(chunk_list) + len(entity_map) + len(relationship_payloads) + 1
 
     @staticmethod
     def _ingest_tx(
@@ -1547,7 +2113,6 @@ class GraphStore:
         concepts_by_chunk: Dict[str, List[str]],
         entities: List[Dict[str, Any]],
         relationships: List[Dict[str, Any]],
-        cooccurrences: List[Tuple[str, str]],
         actor: str,
     ) -> None:
         collection_id = int(collection["id"])
@@ -1678,24 +2243,6 @@ class GraphStore:
                 timestamp=timestamp,
             )
 
-        for concept_a, concept_b in cooccurrences:
-            tx.run(
-                """
-                MATCH (a:Concept {org_id: $org_id, name: $concept_a})
-                MATCH (b:Concept {org_id: $org_id, name: $concept_b})
-                MERGE (a)-[rel:CO_OCCURS_WITH {collection_id: $collection_id}]->(b)
-                  ON CREATE SET rel.created_at = $timestamp,
-                                rel.weight = 0
-                SET rel.weight = coalesce(rel.weight, 0) + 1,
-                    rel.updated_at = $timestamp
-                """,
-                org_id=org_id,
-                collection_id=collection_id,
-                concept_a=concept_a,
-                concept_b=concept_b,
-                timestamp=timestamp,
-            )
-
         tx.run(
             """
             CREATE (event:ChangeEvent {
@@ -1726,11 +2273,6 @@ class GraphStore:
                     "concepts": len(entities),
                     "relationships": len(relationships),
                     "relationship_details": relationships,
-                    "cooccurrences": len(cooccurrences),
-                    "cooccurrence_details": [
-                        {"source": source, "target": target}
-                        for source, target in cooccurrences
-                    ],
                 },
                 ensure_ascii=False,
             ),
@@ -1761,6 +2303,7 @@ class GraphStore:
                 """
                 MATCH (chunk:Chunk {collection_id: $collection_id})-[:MENTIONS]->(concept:Concept {org_id: $org_id})
                 WHERE chunk.chunk_id IN $seed_chunk_ids
+                                    AND coalesce(concept.verification_state, '') <> 'rejected'
                 RETURN concept.name AS name, count(*) AS mentions
                 ORDER BY mentions DESC, name ASC
                 LIMIT 8
@@ -1780,6 +2323,8 @@ class GraphStore:
                 MATCH path=(entry)-[:RELATES_TO*1..{depth}]-(related:Concept {{org_id: $org_id}})
                 WHERE related.name <> entry.name
                   AND all(rel IN relationships(path) WHERE rel.collection_id = $collection_id)
+                                    AND all(node IN nodes(path) WHERE coalesce(node.verification_state, '') <> 'rejected')
+                                    AND all(rel IN relationships(path) WHERE coalesce(rel.verification_state, '') <> 'rejected')
                 WITH entry, related, path,
                      length(path) AS hops,
                      reduce(score = 0.0, rel IN relationships(path) |
@@ -1804,40 +2349,11 @@ class GraphStore:
                 limit=limit,
             ).data()
 
-            cooccurrence_rows = session.run(
-                """
-                MATCH (entry:Concept {org_id: $org_id})
-                WHERE entry.name IN $entry_concepts
-                MATCH path=(entry)-[:CO_OCCURS_WITH]-(related:Concept {org_id: $org_id})
-                WHERE related.name <> entry.name
-                  AND all(rel IN relationships(path) WHERE rel.collection_id = $collection_id)
-                WITH entry, related, path,
-                     1 AS hops,
-                     reduce(score = 0.0, rel IN relationships(path) |
-                         score + 0.25 * coalesce(rel.weight, 1.0)
-                     ) AS path_score
-                ORDER BY path_score DESC, related.name ASC
-                LIMIT $limit
-                OPTIONAL MATCH (related)<-[:MENTIONS]-(chunk:Chunk {collection_id: $collection_id})
-                RETURN entry.name AS entry,
-                       related.name AS related,
-                       [rel IN relationships(path) | {type: coalesce(rel.relation, type(rel)), raw_type: type(rel), source: startNode(rel).name, target: endNode(rel).name, weight: coalesce(rel.weight, 1), description: coalesce(rel.description, '')}] AS edges,
-                       collect(DISTINCT chunk.chunk_id)[0..3] AS chunk_ids,
-                       hops AS hops,
-                       path_score AS score
-                ORDER BY score DESC, hops ASC
-                """,
-                org_id=org_id,
-                collection_id=collection_id,
-                entry_concepts=entry_concepts,
-                limit=max(4, limit // 3),
-            ).data()
-            expanded_rows.extend(cooccurrence_rows)
-
             direct_rows = session.run(
                 """
                 MATCH (concept:Concept {org_id: $org_id})<-[:MENTIONS]-(chunk:Chunk {collection_id: $collection_id})
                 WHERE concept.name IN $entry_concepts
+                                    AND coalesce(concept.verification_state, '') <> 'rejected'
                 RETURN chunk.chunk_id AS chunk_id,
                        count(*) AS mentions,
                        min(chunk.source_label) AS source_label
@@ -1908,24 +2424,6 @@ class GraphStore:
             "latest_changes": changes,
             "graph_latency_ms": (time.perf_counter() - start) * 1000,
         }
-
-    @staticmethod
-    def _cooccurrences(
-        chunks: List[TextChunk], concepts_by_chunk: Dict[str, List[str]]
-    ) -> Set[Tuple[str, str]]:
-        pairs: Set[Tuple[str, str]] = set()
-        by_parent: Dict[str, Set[str]] = {}
-        for chunk in chunks:
-            metadata = chunk.metadata or {}
-            parent_key = f"{metadata.get('filename') or metadata.get('source')}:{metadata.get('parent_chunk_id') or chunk.chunk_id}"
-            by_parent.setdefault(parent_key, set()).update(
-                concepts_by_chunk.get(chunk.chunk_id, [])
-            )
-        for concepts in by_parent.values():
-            for concept_a, concept_b in itertools.combinations(sorted(concepts), 2):
-                if concept_a != concept_b:
-                    pairs.add((concept_a, concept_b))
-        return pairs
 
     @staticmethod
     def _dedupe_edges(edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

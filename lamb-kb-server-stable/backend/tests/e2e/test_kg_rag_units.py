@@ -116,7 +116,7 @@ class GraphStoreSuccessTx:
                     "operation": "automatic_ingestion",
                     "filename": "kg.md",
                     "concepts": ["knowledge graph"],
-                    "payload_json": '{"relationship_details":[{"source":"knowledge graph","target":"neo4j","relation":"stored_in","confidence":0.5}],"cooccurrence_details":[{"source":"knowledge graph","target":"neo4j"}]}',
+                    "payload_json": '{"relationship_details":[{"source":"knowledge graph","target":"neo4j","relation":"stored_in","confidence":0.5}]}',
                     "document_id": "doc-1",
                 }
             )
@@ -181,8 +181,8 @@ class GraphStoreCoverageSession:
                         "actor": "pytest",
                         "timestamp": "2026-05-02T00:00:00Z",
                         "filename": "kg.md",
-                        "concepts": ["knowledge graph"],
-                        "payload_json": "{}",
+                        "concepts": ["knowledge graph", "neo4j"],
+                        "payload_json": '{"relationship_details":[{"source":"knowledge graph","target":"neo4j","relation":"stored_in"}]}',
                         "document_id": "doc-1",
                         "file_id": 2,
                     }
@@ -201,8 +201,8 @@ class GraphStoreCoverageSession:
                     "actor": "pytest",
                     "timestamp": "2026-05-02T00:00:00Z",
                     "filename": "kg.md",
-                    "concepts": ["knowledge graph"],
-                    "payload_json": "{}",
+                    "concepts": ["knowledge graph", "neo4j"],
+                    "payload_json": '{"relationship_details":[{"source":"knowledge graph","target":"neo4j","relation":"stored_in"}]}',
                     "document_id": "doc-1",
                     "file_id": 2,
                     "chunk_ids": ["chunk-1"],
@@ -980,7 +980,7 @@ def test_graph_store_ingest_chunks_uses_mocked_driver_session(monkeypatch):
         ],
     )
 
-    assert writes == 7
+    assert writes == 6
     assert len(driver.session_instance.write_calls) == 1
     call = driver.session_instance.write_calls[0]
     assert call["callback"] == GraphStore._ingest_tx
@@ -1083,6 +1083,26 @@ def test_graph_store_read_methods_and_collection_graph(monkeypatch):
     )
     assert changes[0]["event_id"] == "event-1"
 
+    relationship_changes = graph_store.list_changes(
+        5,
+        "org-1",
+        relationship_source="Knowledge Graph",
+        relationship_target="Neo4j",
+        relationship_relation="stored in",
+    )
+    assert relationship_changes[0]["event_id"] == "event-1"
+    assert (
+        graph_store._event_matches_relationship(
+            {
+                "payload_json": '{"relationship_details":[{"source":"knowledge graph","target":"neo4j","relation":"stored_in"}]}'
+            },
+            "knowledge graph",
+            "neo4j",
+            "stored_in",
+        )
+        is True
+    )
+
     change = graph_store.get_change(5, "org-1", "event-1")
     assert change["chunk_ids"] == ["chunk-1"]
 
@@ -1116,6 +1136,67 @@ def test_graph_store_read_methods_and_collection_graph(monkeypatch):
         "chunks": 0,
         "edges": 0,
     }
+
+
+def test_graph_store_concept_history_excludes_relationship_curation(monkeypatch):
+    class MixedHistorySession(GraphStoreCoverageSession):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if (
+                "RETURN event.event_id AS event_id" in compact_query
+                and "chunk_ids" not in compact_query
+            ):
+                return FakeResult(
+                    rows=[
+                        {
+                            "event_id": "rel-expunge",
+                            "collection_id": params.get("collection_id", 1),
+                            "org_id": params.get("org_id", "org-1"),
+                            "operation": "manual_expunge_relationship",
+                            "actor": "pytest",
+                            "timestamp": "2026-05-02T00:00:02Z",
+                            "filename": None,
+                            "concepts": [
+                                "eastbank shuttle loop",
+                                "transit continuity unit",
+                            ],
+                            "payload_json": '{"source":"eastbank shuttle loop","target":"transit continuity unit","relation":"owned_by"}',
+                            "document_id": None,
+                            "file_id": None,
+                        },
+                        {
+                            "event_id": "concept-created",
+                            "collection_id": params.get("collection_id", 1),
+                            "org_id": params.get("org_id", "org-1"),
+                            "operation": "automatic_ingestion",
+                            "actor": "pytest",
+                            "timestamp": "2026-05-02T00:00:01Z",
+                            "filename": "transit.md",
+                            "concepts": ["eastbank shuttle loop"],
+                            "payload_json": "{}",
+                            "document_id": "doc-1",
+                            "file_id": 2,
+                        },
+                    ]
+                )
+            return super().run(query, **params)
+
+    graph_store = _configured_graph_store(monkeypatch)
+    graph_store._schema_ready = True
+    graph_store.driver.session_instance = MixedHistorySession()
+
+    concept_changes = graph_store.list_changes(
+        5, "org-1", concept="Eastbank Shuttle Loop"
+    )
+    assert [change["event_id"] for change in concept_changes] == ["concept-created"]
+
+    relationship_changes = graph_store.list_changes(
+        5,
+        "org-1",
+        relationship_source="Eastbank Shuttle Loop",
+        relationship_target="Transit Continuity Unit",
+    )
+    assert [change["event_id"] for change in relationship_changes] == ["rel-expunge"]
 
 
 def test_graph_store_collection_graph_no_concepts(monkeypatch):
@@ -1197,6 +1278,17 @@ def test_graph_store_curation_wrappers_and_transactions(monkeypatch):
     )
     assert changed_relation_edit["details"]["new_relation"] == "queries"
 
+    expunged_relation = graph_store.edit_relationship(
+        5,
+        "org-1",
+        source_name="Knowledge Graph",
+        target_name="Neo4j",
+        relation="stored in",
+        verification_state="rejected",
+    )
+    assert expunged_relation["operation"] == "manual_expunge_relationship"
+    assert expunged_relation["details"]["expunged"] is True
+
     curation = graph_store.update_concept_curation(
         5,
         "org-1",
@@ -1206,6 +1298,15 @@ def test_graph_store_curation_wrappers_and_transactions(monkeypatch):
         verification_state="verified",
     )
     assert curation["ok"] is True
+
+    expunged_concept = graph_store.update_concept_curation(
+        5,
+        "org-1",
+        "Knowledge Graph",
+        verification_state="rejected",
+    )
+    assert expunged_concept["operation"] == "manual_expunge_concept"
+    assert expunged_concept["details"]["expunged"] is True
 
     tx = GraphStoreSuccessTx()
     assert GraphStore._rename_concept_tx(
@@ -1356,7 +1457,7 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
                         "operation": "automatic_ingestion",
                         "filename": "kg.md",
                         "concepts": ["knowledge graph"],
-                        "payload_json": '{"relationships":[null,{"source":"knowledge graph","target":"neo4j","relation":"stored_in"}],"cooccurrences":[null,{"source":"knowledge graph","target":"neo4j"}]}',
+                        "payload_json": '{"relationships":[null,{"source":"knowledge graph","target":"neo4j","relation":"stored_in"}]}',
                         "document_id": "doc-1",
                     }
                 )
@@ -1429,7 +1530,6 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
                 "confidence": 0.5,
             }
         ],
-        [("knowledge graph", "neo4j")],
         "actor",
     )
     assert len(tx.queries) >= 6
@@ -1474,6 +1574,11 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
             "weight": 1,
         }
     ]
+    expansion_queries = " ".join(
+        query["query"] for query in graph_store.driver.session_instance.queries
+    )
+    assert "coalesce(concept.verification_state, '') <> 'rejected'" in expansion_queries
+    assert "coalesce(rel.verification_state, '') <> 'rejected'" in expansion_queries
     assert (
         graph_store.expand_from_chunks(5, "org-1", [], depth=2, limit=10)[
             "expanded_chunk_ids"
@@ -1514,27 +1619,6 @@ def test_graph_store_revert_ingest_expand_and_utilities(monkeypatch):
         == 0
     )
 
-    pair_chunks = [
-        TextChunk(
-            chunk_id="a",
-            text="",
-            parent_text="",
-            metadata={"source": "s", "parent_chunk_id": "p"},
-        ),
-        TextChunk(
-            chunk_id="b",
-            text="",
-            parent_text="",
-            metadata={"source": "s", "parent_chunk_id": "p"},
-        ),
-    ]
-    assert GraphStore._cooccurrences(
-        pair_chunks, {"a": ["a", "b"], "b": ["b", "c"]}
-    ) == {
-        ("a", "b"),
-        ("a", "c"),
-        ("b", "c"),
-    }
     duplicated_edges = [
         {"source": "a", "target": "b", "type": "r", "i": index} for index in range(82)
     ]
@@ -1938,6 +2022,106 @@ def test_edit_relationship_missing_relationship_returns_not_found():
     )
 
     assert result == {"ok": False, "reason": "relationship_not_found"}
+
+
+def test_edit_relationship_no_change_does_not_record_event():
+    tx = GraphStoreSuccessTx()
+
+    result = GraphStore._edit_relationship_tx(
+        tx,
+        collection_id=1,
+        org_id="owner",
+        source_name="Knowledge Graph",
+        target_name="Neo4j",
+        relation="stored in",
+        new_relation=None,
+        weight=None,
+        description=None,
+        evidence=None,
+        notes=None,
+        tags=None,
+        verification_state="unverified",
+        actor="test",
+        reason="test",
+        operation="manual_curate_relationship",
+        timestamp="2026-05-02T00:00:00Z",
+    )
+
+    assert result["ok"] is True
+    assert result["reason"] == "no_change"
+    assert result["event_id"] is None
+    assert result["details"]["changed"] is False
+    compact_queries = [" ".join(item["query"].split()) for item in tx.queries]
+    assert not any("CREATE (event:ChangeEvent" in query for query in compact_queries)
+    assert not any("SET rel.updated_at" in query for query in compact_queries)
+
+
+def test_revert_relationship_expunge_restores_approved_edge():
+    class RelationshipExpungeTx(GraphStoreSuccessTx):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN event.operation AS operation" in compact_query:
+                return FakeResult(
+                    single_row={
+                        "operation": "manual_expunge_relationship",
+                        "filename": "",
+                        "concepts": ["knowledge graph", "neo4j"],
+                        "payload_json": '{"source":"knowledge graph","target":"neo4j","relation":"stored_in","old_weight":1.5,"old_description":"old","old_evidence":"evidence","old_chunk_id":"chunk-1","old_notes":"notes","old_tags":["manual"]}',
+                    }
+                )
+            return super().run(query, **params)
+
+    tx = RelationshipExpungeTx()
+    result = GraphStore._revert_change_tx(
+        tx, 5, "org-1", "rel-expunge", "actor", "restore", "now"
+    )
+
+    assert result["reverted"] is True
+    assert result["operation"] == "manual_expunge_relationship"
+    assert result["revert_event_id"] == "revert-1"
+    compact_queries = [" ".join(item["query"].split()) for item in tx.queries]
+    assert any(
+        "rel.verification_state = 'verified'" in query for query in compact_queries
+    )
+    assert any(
+        "MERGE (event)-[:REVERTS]->(original)" in query for query in compact_queries
+    )
+
+
+def test_revert_concept_expunge_restores_mentions_and_relationships():
+    class ConceptExpungeTx(GraphStoreSuccessTx):
+        def run(self, query, **params):
+            compact_query = " ".join(query.split())
+            if "RETURN event.operation AS operation" in compact_query:
+                return FakeResult(
+                    single_row={
+                        "operation": "manual_expunge_concept",
+                        "filename": "",
+                        "concepts": ["knowledge graph"],
+                        "payload_json": '{"concept":"knowledge graph","old_notes":"old notes","old_tags":["kg"],"removed_chunk_mentions":["chunk-1"],"removed_relationships":[{"source":"knowledge graph","target":"neo4j","relation":"stored_in","weight":2.0,"description":"old","evidence":"evidence","chunk_id":"chunk-1","notes":"notes","tags":["manual"]}]}',
+                    }
+                )
+            return super().run(query, **params)
+
+    tx = ConceptExpungeTx()
+    result = GraphStore._revert_change_tx(
+        tx, 5, "org-1", "concept-expunge", "actor", "restore", "now"
+    )
+
+    assert result["reverted"] is True
+    assert result["operation"] == "manual_expunge_concept"
+    assert result["chunk_ids"] == ["chunk-1"]
+    compact_queries = [" ".join(item["query"].split()) for item in tx.queries]
+    assert any(
+        "concept.verification_state = 'verified'" in query for query in compact_queries
+    )
+    assert any(
+        "MERGE (chunk)-[mention:MENTIONS]->(concept)" in query
+        for query in compact_queries
+    )
+    assert any(
+        "rel.verification_state = 'verified'" in query for query in compact_queries
+    )
 
 
 def test_collection_graph_unconfigured_returns_empty_snapshot():
